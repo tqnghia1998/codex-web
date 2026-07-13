@@ -1,4 +1,13 @@
 export function mapBrowserPathToInitialRoute(pathname: string, search: string) {
+  if (pathname === "/" && search) {
+    const folder = new URLSearchParams(search).get("folder")?.trim();
+    if (folder) {
+      return {
+        memoryPath: `/projects?${new URLSearchParams({ projectId: folder })}`,
+      };
+    }
+  }
+
   if (pathname === "/share/receive" && search) {
     const params = new URLSearchParams(search);
 

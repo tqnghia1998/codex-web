@@ -398,6 +398,14 @@ if (initialRoute.browserPath) {
 electronShim.initialSidebarState = initialSidebarState;
 electronShim.onMemoryNavigationChanged = (navigation) => {
   const path = navigation.location.pathname;
+  const folder = new URLSearchParams(window.location.search).get("folder")?.trim();
+  if (path === "/" && folder && navigation.action !== "POP") {
+    dispatchNavigateToRoute(
+      `/projects?${new URLSearchParams({ projectId: folder })}`,
+    );
+    return;
+  }
+
   if (
     navigation.action !== "POP" &&
     mobileMediaQuery.matches &&
@@ -568,6 +576,14 @@ export const ipcRenderer = {
 };
 
 ensureSocket();
+
+const folderToAdd = new URLSearchParams(window.location.search).get("folder")?.trim();
+if (folderToAdd) {
+  void ipcRenderer.invoke("codex_desktop:message-from-view", {
+    type: "electron-add-new-workspace-root-option",
+    root: folderToAdd,
+  });
+}
 
 export const contextBridge = {
   exposeInMainWorld(_key: string, _api: unknown): void {
