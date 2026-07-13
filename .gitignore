@@ -1,3 +1,6 @@
 node_modules/
 scratch*/
 sentry
+src/server/**/*.js
+src/server/**/*.d.ts
+src/server/**/*.map
