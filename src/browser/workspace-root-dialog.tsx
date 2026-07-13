@@ -1,10 +1,4 @@
-import {
-  QueryClient,
-  QueryClientProvider,
-  keepPreviousData,
-  useQuery,
-} from "@tanstack/react-query";
-import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CloseIcon, FolderIcon, UpIcon } from "./icons";
 
@@ -40,25 +34,39 @@ function WorkspaceRootDialog({
   const [userSelectedPath, setUserSelectedPath] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
-  const directoryQuery = useQuery({
-    placeholderData: keepPreviousData,
-    queryFn: () => listDirectory(directoryPath),
-    queryKey: ["workspace-directory-entries", directoryPath],
-    retry: false,
-  });
-  const entries = useMemo(
-    () =>
-      directoryQuery.data?.entries.filter(
-        (entry) => entry.type === "directory",
-      ) ?? [],
-    [directoryQuery.data?.entries],
-  );
-  const parentPath = directoryQuery.data?.parentPath ?? null;
-  const isBusy = directoryQuery.isFetching;
-  const isLoading = directoryQuery.isPending && !directoryQuery.data;
-  const queryError = directoryQuery.isError
-    ? errorMessage(directoryQuery.error)
-    : null;
+  const [directoryData, setDirectoryData] =
+    useState<WorkspaceDirectoryEntries | null>(null);
+  const [isBusy, setIsBusy] = useState(true);
+  const [queryError, setQueryError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setIsBusy(true);
+    setQueryError(null);
+
+    listDirectory(directoryPath)
+      .then((data) => {
+        if (active) {
+          setDirectoryData(data);
+          setIsBusy(false);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setQueryError(errorMessage(error));
+          setIsBusy(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [directoryPath, listDirectory]);
+
+  const entries =
+    directoryData?.entries.filter((entry) => entry.type === "directory") ?? [];
+  const parentPath = directoryData?.parentPath ?? null;
+  const isLoading = isBusy && directoryData === null;
 
   function navigateTo(nextDirectoryPath: string): void {
     setUserSelectedPath(nextDirectoryPath);
@@ -538,14 +546,6 @@ export async function openSelectWorkspaceRootDialog({
 }: WorkspaceRootDialogOptions): Promise<string | null> {
   const activeElement = document.activeElement;
 
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-      },
-    },
-  });
-
   const { resolveFn, promise } = ((): {
     promise: Promise<string | null>;
     resolveFn: (target: string | null) => void;
@@ -563,9 +563,7 @@ export async function openSelectWorkspaceRootDialog({
 
   const reactRoot = createRoot(ensureHost());
   reactRoot.render(
-    <QueryClientProvider client={queryClient}>
-      <WorkspaceRootDialog listDirectory={listDirectory} onClose={resolveFn} />
-    </QueryClientProvider>,
+    <WorkspaceRootDialog listDirectory={listDirectory} onClose={resolveFn} />,
   );
 
   const result = await promise;

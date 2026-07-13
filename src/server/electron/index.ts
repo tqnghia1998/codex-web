@@ -40,19 +40,8 @@ type IpcMainBridgeState = {
   handleRendererInvoke?: (
     channel: string,
     args: unknown[],
-    sourceUrl?: string,
   ) => Promise<unknown>;
-  handleRendererPostMessage?: (
-    channel: string,
-    message: unknown,
-    ports: StubMessagePort[],
-    sourceUrl?: string,
-  ) => void;
-  handleRendererSend?: (
-    channel: string,
-    args: unknown[],
-    sourceUrl?: string,
-  ) => void;
+  handleRendererSend?: (channel: string, args: unknown[]) => void;
 };
 
 function getIpcMainBridgeState(): IpcMainBridgeState {
@@ -264,7 +253,6 @@ function createIpcMainStub(): {
   bridgeState.handleRendererSend = (
     channel: string,
     args: unknown[],
-    sourceUrl?: string,
   ): void => {
     const event = createIpcMainEvent();
     emitter.emit(channel, event, ...args);
@@ -897,22 +885,25 @@ function createSessionStub(label: string): {
     onBeforeRequest: (...args: unknown[]) => void;
     onBeforeSendHeaders: (...args: unknown[]) => void;
   };
+  cookies: ReturnType<typeof createEmitterStub> & {
+    get: (...args: unknown[]) => Promise<unknown[]>;
+  };
 } {
   const emitter = createEmitterStub(label);
-  const cookiesEmitter = createEmitterStub(`${label}.cookies`);
+  const cookies = createEmitterStub(`${label}.cookies`);
   return {
     cookies: {
       async get(...args: unknown[]): Promise<unknown[]> {
         log(`${label}.cookies.get`, args);
         return [];
       },
-      off: cookiesEmitter.off,
-      on: cookiesEmitter.on,
-      once: cookiesEmitter.once,
+      off: cookies.off,
+      on: cookies.on,
+      once: cookies.once,
       async remove(...args: unknown[]): Promise<void> {
         log(`${label}.cookies.remove`, args);
       },
-      removeListener: cookiesEmitter.removeListener,
+      removeListener: cookies.removeListener,
       async set(...args: unknown[]): Promise<void> {
         log(`${label}.cookies.set`, args);
       },
@@ -952,6 +943,13 @@ function createSessionStub(label: string): {
       },
       onBeforeSendHeaders(...args: unknown[]): void {
         log(`${label}.webRequest.onBeforeSendHeaders`, args);
+      },
+    },
+    cookies: {
+      ...cookies,
+      async get(...args: unknown[]): Promise<unknown[]> {
+        log(`${label}.cookies.get`, args);
+        return [];
       },
     },
   };

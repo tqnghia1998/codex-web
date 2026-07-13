@@ -16,10 +16,8 @@ import Fastify from "fastify";
 import fastifyMultipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import { installModuleAliasHook } from "./module";
-import { glob } from "glob";
 
 type ServerOptions = {
-  host: string;
   port: number;
 };
 
@@ -49,13 +47,11 @@ type RendererToMainMessage =
       requestId: string;
       channel: string;
       args: unknown[];
-      sourceUrl: string;
     }
   | {
       type: "ipc-renderer-send";
       channel: string;
       args: unknown[];
-      sourceUrl: string;
     }
   | {
       type: "ipc-renderer-post-message";
@@ -259,15 +255,14 @@ function printUsage(): void {
   console.log(
     [
       "Usage:",
-      "  server [--host <host>] [--port <port>]",
+      "  server [--port <port>]",
       "",
-      "Defaults:",
-      "  --host 127.0.0.1",
+      "Default:",
       "  --port 8214",
       "",
       "Examples:",
-      "  yarn server",
-      "  yarn server --port 9000",
+      "  npm run run",
+      "  npm run run -- --port 9000",
     ].join("\n"),
   );
 }
@@ -289,9 +284,6 @@ function parseServerArgs(args: string[]): ServerOptions {
         short: "h",
         type: "boolean",
       },
-      host: {
-        type: "string",
-      },
       port: {
         type: "string",
       },
@@ -305,7 +297,6 @@ function parseServerArgs(args: string[]): ServerOptions {
   }
 
   return {
-    host: parsed.values.host ?? "127.0.0.1",
     port: parsed.values.port ? parsePort(parsed.values.port) : 8214,
   };
 }
@@ -643,8 +634,8 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     });
   });
 
-  await app.listen({ host: options.host, port: options.port });
-  console.log(`IPC bridge listening at ws://${options.host}:${options.port}`);
+  await app.listen({ host: "127.0.0.1", port: options.port });
+  console.log(`IPC bridge listening at ws://127.0.0.1:${options.port}`);
 
   ensureElectronLikeProcessContext();
   installModuleAliasHook();
@@ -660,10 +651,13 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     version: packageJson.version,
   };
 
-  const matches = await glob("../../scratch/asar/.vite/build/main-*.js", {
-    nodir: true,
-    cwd: __dirname,
-  });
+  const buildDirectory = path.resolve(
+    __dirname,
+    "../../scratch/asar/.vite/build",
+  );
+  const matches = (await fs.readdir(buildDirectory)).filter((name) =>
+    /^main-.+\.js$/.test(name),
+  );
 
   if (matches.length === 0) {
     throw new Error("no main bundle found");
@@ -673,7 +667,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     throw new Error("multiple main bundles found");
   }
 
-  const module = require(matches[0]!);
+  const module = require(path.join(buildDirectory, matches[0]!));
   module.runMainAppStartup();
 }
 
