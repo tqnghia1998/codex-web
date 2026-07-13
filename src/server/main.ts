@@ -41,6 +41,10 @@ function cacheControlForWebviewFile(filePath: string): string {
     : "public, max-age=0";
 }
 
+const asarRoot = path.resolve(
+  process.env.CODEX_ASAR_DIR ?? path.resolve(process.cwd(), "scratch/asar"),
+);
+
 type RendererToMainMessage =
   | {
       type: "ipc-renderer-invoke";
@@ -379,10 +383,7 @@ function ensureElectronLikeProcessContext(): void {
     resourcesPath?: string;
     type?: string;
   };
-  processWithElectronFields.resourcesPath ??= path.resolve(
-    __dirname,
-    "../../scratch/asar",
-  );
+  processWithElectronFields.resourcesPath ??= asarRoot;
   processWithElectronFields.type ??= "browser";
 }
 
@@ -435,7 +436,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   });
 
   await app.register(fastifyStatic, {
-    root: path.resolve(__dirname, "../../scratch/asar/webview"),
+    root: path.join(asarRoot, "webview"),
     prefix: "/",
     cacheControl: false,
     setHeaders(response, filePath) {
@@ -642,7 +643,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
   const packageJson = JSON.parse(
     await fs.readFile(
-      path.resolve(__dirname, "../../scratch/asar/package.json"),
+      path.join(asarRoot, "package.json"),
       "utf8",
     ),
   );
@@ -651,10 +652,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     version: packageJson.version,
   };
 
-  const buildDirectory = path.resolve(
-    __dirname,
-    "../../scratch/asar/.vite/build",
-  );
+  const buildDirectory = path.join(asarRoot, ".vite/build");
   const matches = (await fs.readdir(buildDirectory)).filter((name) =>
     /^main-.+\.js$/.test(name),
   );

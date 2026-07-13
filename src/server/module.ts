@@ -1,5 +1,5 @@
 import Module from "node:module";
-import path from "node:path";
+import electronModule from "./electron/index";
 
 export function installModuleAliasHook(): void {
   const moduleWithLoad = Module as typeof Module & {
@@ -17,10 +17,7 @@ export function installModuleAliasHook(): void {
     isMain: boolean,
   ): unknown {
     if (request === "electron") {
-      return originalLoad.call(this, path.resolve(
-        path.resolve(__dirname, "../.."),
-        "src/server/electron/index.js",
-      ), parent, isMain);
+      return { ...electronModule, default: electronModule };
     }
 
     return originalLoad.call(this, request, parent, isMain);
