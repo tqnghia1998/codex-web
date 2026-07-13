@@ -42,6 +42,15 @@ CODEX_APP_DIR="/Applications/Codex.app" npm install && \
 npm run run
 ```
 
+For a single runnable server file:
+
+```bash
+npm run build
+node dist/codex-web.js --port 9000
+```
+
+`dist/codex-web.js` uses `scratch/asar` by default. Set `CODEX_ASAR_DIR` to use a different extracted app.
+
 Then open <http://127.0.0.1:8214> in a browser. To open a folder directly, URL-encode
 its path:
 

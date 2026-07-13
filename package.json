@@ -11,6 +11,7 @@
   "bin": "src/server/main.js",
   "scripts": {
     "setup": "./scripts/prepare_asar && vite build --config vite.browser.config.ts && cd src/server && tsc",
+    "build": "npm run setup && node scripts/build.mjs",
     "run": "CODEX_CLI_PATH=${CODEX_CLI_PATH:-$(command -v codex)} node src/server/main.js"
   },
   "repository": "git@github.com:0xcaff/codex-web.git",
@@ -28,6 +29,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
     "prettier": "^3.8.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
