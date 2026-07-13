@@ -12,7 +12,6 @@ type CodexFetchMessage = {
 
 type PickFilesRequest = {
   imagesOnly?: boolean;
-  pickerTitle?: string;
 };
 
 function openBrowserFilePicker({
@@ -170,8 +169,6 @@ function parsePickFilesRequest(message: CodexFetchMessage): PickFilesRequest {
     return {
       imagesOnly:
         typeof parsed.imagesOnly === "boolean" ? parsed.imagesOnly : undefined,
-      pickerTitle:
-        typeof parsed.pickerTitle === "string" ? parsed.pickerTitle : undefined,
     };
   } catch {
     return {};

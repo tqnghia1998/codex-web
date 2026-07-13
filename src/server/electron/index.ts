@@ -40,19 +40,8 @@ type IpcMainBridgeState = {
   handleRendererInvoke?: (
     channel: string,
     args: unknown[],
-    sourceUrl?: string,
   ) => Promise<unknown>;
-  handleRendererPostMessage?: (
-    channel: string,
-    message: unknown,
-    ports: StubMessagePort[],
-    sourceUrl?: string,
-  ) => void;
-  handleRendererSend?: (
-    channel: string,
-    args: unknown[],
-    sourceUrl?: string,
-  ) => void;
+  handleRendererSend?: (channel: string, args: unknown[]) => void;
 };
 
 function getIpcMainBridgeState(): IpcMainBridgeState {
@@ -264,7 +253,6 @@ function createIpcMainStub(): {
   bridgeState.handleRendererSend = (
     channel: string,
     args: unknown[],
-    sourceUrl?: string,
   ): void => {
     const event = createIpcMainEvent();
     emitter.emit(channel, event, ...args);
@@ -893,7 +881,24 @@ function createSessionStub(label: string): {
   };
 } {
   const emitter = createEmitterStub(label);
+  const cookies = createEmitterStub(`${label}.cookies`);
   return {
+    cookies: {
+      async get(...args: unknown[]): Promise<unknown[]> {
+        log(`${label}.cookies.get`, args);
+        return [];
+      },
+      off: cookies.off,
+      on: cookies.on,
+      once: cookies.once,
+      async remove(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.remove`, args);
+      },
+      removeListener: cookies.removeListener,
+      async set(...args: unknown[]): Promise<void> {
+        log(`${label}.cookies.set`, args);
+      },
+    },
     async loadExtension(extensionPath: string): Promise<{
       id: string;
       name: string;
