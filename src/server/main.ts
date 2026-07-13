@@ -6,6 +6,7 @@ declare global {
   };
 }
 
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -671,6 +672,14 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
 async function main(args: string[]) {
   const options = parseServerArgs(args);
+
+  if (!process.env.CODEX_CLI_PATH) {
+    try {
+      process.env.CODEX_CLI_PATH = execFileSync("which", ["codex"], {
+        encoding: "utf8",
+      }).trim();
+    } catch {}
+  }
 
   await startIpcBridgeServer(options);
 }
