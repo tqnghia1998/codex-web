@@ -1,114 +1,90 @@
 # codex-web
 
-a browser frontend for codex desktop, running on a machine you control.
+A browser frontend for Codex Desktop, running locally on macOS.
 
-https://github.com/user-attachments/assets/0a33cbd8-741c-412c-9e75-46dfe9324596
+## Requirements
 
-## motivation
+- macOS with Codex Desktop installed
+- Node.js and npm
+- Codex CLI installed and signed in
 
-the agents were never meant to stay trapped in a terminal window for long.
-codex desktop brought the power of agents to your local computer, where your
-files, credentials, and tools already live.
+## Setup
 
-codex-web brings Codex Desktop to a local browser while keeping the backend on
-the same Mac. agents keep running after the browser closes, and you can
-reconnect from any browser on that machine.
-
-this project aims to be as thin a wrapper as possible to ensure upstream changes
-to the codex desktop app can be integrated quickly.
-
-## usage
-
-`codex-web` serves the browser client and hosts the desktop-side bridge. by
-default, it listens on `127.0.0.1:8214`.
-
-it will use `codex` from `PATH` if available, or `CODEX_CLI_PATH` if you set
-it.
-
-The build uses the installed Codex Desktop app as its source. By default it
-expects `/Applications/ChatGPT.app` and reads only
-`Contents/Resources/app.asar`; the installed app itself is not started.
+`npm run setup` extracts the installed Codex Desktop app, applies the browser
+patches, and builds the frontend. It reads
+`/Applications/ChatGPT.app/Contents/Resources/app.asar` by default.
 
 ```bash
-npm install && npm run setup
-npm run run
+npm install
+npm run setup
 ```
 
 Set `CODEX_APP_DIR` when the app is installed elsewhere:
 
 ```bash
-CODEX_APP_DIR="/Applications/Codex.app" npm install && \
-  CODEX_APP_DIR="/Applications/Codex.app" npm run setup
+CODEX_APP_DIR="/Applications/Codex.app" npm run setup
+```
+
+Sign in to the CLI before starting the server:
+
+```bash
+codex login --device-auth
+```
+
+## Run
+
+```bash
 npm run run
 ```
 
-For a single runnable server file:
+The server listens on `127.0.0.1:8214`. Change the port with:
+
+```bash
+npm run run -- --port 9000
+```
+
+To build one runnable server file:
 
 ```bash
 npm run build
 node dist/codex-web.js --port 9000
 ```
 
-`dist/codex-web.js` uses `scratch/asar` by default. Set `CODEX_ASAR_DIR` to use a different extracted app.
+The bundled server uses `scratch/asar` by default. Set `CODEX_ASAR_DIR` to use
+another extracted app, and `CODEX_CLI_PATH` to use a specific Codex CLI binary.
 
-Then open <http://127.0.0.1:8214> in a browser. To open a folder directly, URL-encode
-its path:
+Open <http://127.0.0.1:8214>. To start with a folder selected, URL-encode its
+path:
 
 ```text
-http://127.0.0.1:8214/?folder=%2FUsers%2Fme%2FCode%2Fproject
+http://127.0.0.1:8214/?folder=%2FUsers%2Fme%2FDocuments
 ```
 
-### sign in
+## Updating Codex Desktop
 
-ensure the codex cli on the host machine is signed in before starting the
-server.
+Update Codex Desktop first, then regenerate the build:
 
 ```bash
-codex login --device-auth
+rm -rf scratch scratch-backup
+CODEX_APP_DIR="/Applications/ChatGPT.app" DEV=1 npm run setup
+mv scratch scratch-backup
 ```
 
-## security
+Run `npm run setup` again after the update. It extracts the new `app.asar`,
+applies every patch in `patches/`, and rebuilds the browser assets.
 
-The server binds to `127.0.0.1` and has no authentication. Do not expose it
-through a network proxy.
+If an upstream update changes bundle names or code, inspect failed patches and
+update the corresponding patch files. Use strict mode to make any failed patch
+stop the build:
 
-Someone with access to the web UI may be able to:
+```bash
+PATCH_STRICT=1 npm run setup
+```
 
-- run commands on the host, limited only by the permissions of the `codex-web`
-  server process.
-- read or modify files, environment variables, credentials, ssh keys, and other
-  local resources that are accessible to that process.
-- use the codex / chatgpt account already signed in on the host. this may
-  consume usage quota or billing credits, and may expose account metadata shown
-  by the app or cli, such as name or email address.
+Validate the result by starting the server and opening the browser UI.
 
-## features
+## Security
 
-- runs locally on macOS
-- reachable from a local browser
-- thin wrapper, so updates should land fast
-- working today:
-  - subagents
-  - inline images
-  - editor sidepanel
-  - transcription
-
-## roadmap
-
-some parts of the desktop experience are not wired up yet:
-
-- browser panel support, likely rebuilt around iframes
-- terminal support
-- git worker integration
-- whatever else people find and file issues for
-
-## issues welcome
-
-if something is broken, missing, or rough around the edges, please file an
-issue.
-
-using `codex-web` in an interesting way? post about it on x and tag me
-[@0xcaff](https://x.com/0xcaff).
-
-using this at a company and need something more tailored? email me and we can
-talk.
+The server has no authentication. Keep it bound to `127.0.0.1` unless you put
+an authenticated, encrypted proxy in front of it. Anyone who can access the UI
+may run commands and read or modify resources available to the server process.
