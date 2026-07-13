@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-unzip -o "$HOSTED_CODEX_APP_ZIP" -d scratch/
-asar extract "scratch/ChatGPT.app/Contents/Resources/app.asar" "scratch/asar"
+CODEX_APP_DIR="${CODEX_APP_DIR:-/Applications/ChatGPT.app}"
+APP_ASAR="$CODEX_APP_DIR/Contents/Resources/app.asar"
+if [[ ! -f "$APP_ASAR" ]]; then
+  echo "Codex Desktop app.asar not found: $APP_ASAR" >&2
+  echo "Set CODEX_APP_DIR to the installed .app path." >&2
+  exit 1
+fi
+
+rm -rf scratch/asar
+if [[ ! -f "node_modules/@electron/asar/bin/asar.mjs" ]]; then
+  echo "asar is not installed; run npm install" >&2
+  exit 1
+fi
+node "node_modules/@electron/asar/bin/asar.mjs" extract "$APP_ASAR" "scratch/asar"
 cp assets/* scratch/asar/webview/
 PWA_SOURCE_ICON="scratch/asar/webview/assets/app-D0g8sCle.png"
 PWA_TARGET_ICON="scratch/asar/webview/assets/pwa-icon-512.png"
@@ -17,28 +29,140 @@ if [[ -n "${DEV:-}" ]]; then
   prettier --ignore-path /dev/null --ignore-unknown --write "scratch/asar"
 else
   patched_files=()
+  missing_patched_files=()
   while IFS= read -r patched_file; do
-    patched_files+=("$patched_file")
+    if [[ -f "$patched_file" ]]; then
+      patched_files+=("$patched_file")
+    else
+      missing_patched_files+=("$patched_file")
+    fi
   done < <(
     awk '/^\+\+\+ b\//{sub(/^\+\+\+ b\//, "scratch/asar/"); print}' patches/*.patch | sort -u
   )
+
+  if (( ${#missing_patched_files[@]} > 0 )); then
+    echo "Warning: some patch targets are missing; incompatible patches may fail below:" >&2
+    printf '  %s\n' "${missing_patched_files[@]}" >&2
+  fi
+
   prettier --ignore-path /dev/null --ignore-unknown --write "${patched_files[@]}"
 fi
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-remove-csp.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-style.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-safe-header-left.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-preload.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-favicon.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-pwa.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-thread-title.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-initial-route.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-electron-shim-close-sidebar.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-prosemirror-inputmode.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-use-atfs-for-local-files.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-statsig-override-adapter.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-prioritize-startup-requests.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/webview-prompt-search-param.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/preload-disable-device-check.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/sentry-disable-shell.patch
-patch --batch --forward --strip 1 --directory scratch/asar < patches/sentry-disable-webview.patch
+
+PATCH_STRICT="${PATCH_STRICT:-0}"
+apply_patch() {
+  local patch_file="$1"
+  if ! patch --batch --forward --no-backup-if-mismatch --strip 1 --directory scratch/asar < "$patch_file"; then
+    if [[ "$PATCH_STRICT" == 1 ]]; then
+      return 1
+    fi
+    echo "Warning: skipped failed patch: $patch_file" >&2
+    find scratch/asar -name '*.rej' -delete
+  fi
+}
+apply_patch patches/webview-remove-csp.patch
+apply_patch patches/webview-style.patch
+apply_patch patches/webview-preload.patch
+apply_patch patches/webview-favicon.patch
+apply_patch patches/webview-pwa.patch
+apply_patch patches/webview-thread-title.patch
+apply_patch patches/webview-initial-route.patch
+apply_patch patches/webview-electron-shim-close-sidebar.patch
+apply_patch patches/webview-prosemirror-inputmode.patch
+apply_patch patches/webview-use-atfs-for-local-files.patch
+apply_patch patches/webview-prompt-search-param.patch
+apply_patch patches/webview-app-host-services.patch
+apply_patch patches/sentry-disable-shell.patch
+apply_patch patches/sentry-disable-webview.patch
+
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    source, count = re.subn(
+        r"(\.current\?\?=[A-Za-z0-9_$]+\(\{initialEntries:)n(,initialIndex:[A-Za-z0-9_$]+,v5Compat:!0\}\))",
+        r"\1n??[window.__ELECTRON_SHIM__?.initialRoute??`/`]\2",
+        source,
+        count=1,
+    )
+    if count:
+        source, navigation_count = re.subn(
+            r"(l=[A-Za-z0-9_$]+\.useCallback\(e=>\{)(i===!1\?c\(e\):[A-Za-z0-9_$]+\.startTransition\(\(\)=>[A-Za-z0-9_$]+\(e\)\))",
+            r"\1window.__ELECTRON_SHIM__?.onMemoryNavigationChanged?.(e);\2",
+            source,
+            count=1,
+        )
+        path.write_text(source)
+        print(f"patched initial route in {path} (navigation: {navigation_count})")
+
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    source, count = re.subn(
+        r"ge=x\?null:O\?\?Te\(`~`\)",
+        "ge=x?null:P?.hostId==null&&P?.projectId!=null?P.projectId:O??Te(`~`)",
+        source,
+        count=1,
+    )
+    if count:
+        path.write_text(source)
+        print(f"patched project root in {path}")
+
+PY
+
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    if "connect-app-host" not in source:
+        continue
+    source, count = re.subn(
+        r"mTe=new pTe\(\{appActions:wb,appUpdates:tTe,downloads:dTe\}\)",
+        "mTe=new pTe({...window.__ELECTRON_SHIM__?.services,appActions:wb,appUpdates:tTe,downloads:dTe,requestUserInputAutoResolution:{recordConversationActivity:()=>undefined,setConversationPresented:()=>undefined,snooze:()=>undefined}})",
+        source,
+        count=1,
+    )
+    source, route_count = re.subn(
+        r"async function _Te\(\)\{Nb=gTe\(\),Pb=await Nb\.services,Pb\.devboxService\}",
+        "async function _Te(){if(window.__ELECTRON_SHIM__!=null){Nb=mTe,Pb=mTe.services,Pb.devboxService;return}Nb=gTe(),Pb=await Nb.services,Pb.devboxService}",
+        source,
+        count=1,
+    )
+    if count or route_count:
+        path.write_text(source)
+        print(f"patched app-host services in {path}")
+
+PY
+while IFS= read -r sentry_bundle; do
+  python3 - "$sentry_bundle" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+source = path.read_text()
+source, count = re.subn(
+    r"(return GB\(\{)(dsn:)", r"\1enabled:!1,\2", source, count=1
+)
+if count:
+    path.write_text(source)
+else:
+    print(f"Warning: could not disable Sentry in {path}", file=sys.stderr)
+PY
+done < <(grep -rlF "Sentry SDK should be initialized before the Electron app" scratch/asar/.vite/build --include='*.js' || true)
+
+python3 - <<'PY'
+from pathlib import Path
+
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    if "getSentryInitOptions" not in source:
+        continue
+    source = source.replace("Vk({beforeSend:", "Vk({enabled:!1,beforeSend:", 1)
+    path.write_text(source)
+PY
+
+
 rm -rf scratch/asar/node_modules/better-sqlite3
