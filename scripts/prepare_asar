@@ -78,6 +78,22 @@ python3 - <<'PY'
 import re
 from pathlib import Path
 
+index = Path("scratch/asar/webview/index.html")
+source = index.read_text()
+source, count = re.subn(
+    r"\s*<meta\s+http-equiv=[\"']Content-Security-Policy[\"'][^>]*>",
+    "",
+    source,
+    flags=re.IGNORECASE,
+)
+if count:
+    index.write_text(source)
+PY
+
+python3 - <<'PY'
+import re
+from pathlib import Path
+
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
     source, count = re.subn(
