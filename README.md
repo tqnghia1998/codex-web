@@ -50,9 +50,9 @@ npm run build
 node dist/codex-web.js --port 9000
 ```
 
-The bundled server still needs the patched app files from `scratch/asar`.
-When you copy `codex-web.js` somewhere else, either copy `scratch/asar` next to
-it (or one directory above it), or point at an existing extracted app:
+`dist/codex-web.js` is now self-contained. It embeds the patched `scratch/asar`
+tree and extracts it to a cache directory under your macOS temp folder on first
+run. You can still override that with an existing extracted app:
 
 ```bash
 CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node codex-web.js --port 9000
