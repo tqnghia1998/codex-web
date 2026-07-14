@@ -14,6 +14,29 @@ type PickFilesRequest = {
   imagesOnly?: boolean;
 };
 
+type UploadedFile = {
+  label: string;
+  path: string;
+  fsPath: string;
+};
+
+const BROWSER_ATTACHMENT_CREATE = "SAVE_TAB_CONTEXT_ASSET_CREATE";
+const BROWSER_ATTACHMENT_APPEND_CHUNK = "SAVE_TAB_CONTEXT_ASSET_APPEND_CHUNK";
+const BROWSER_ATTACHMENT_FINISH = "SAVE_TAB_CONTEXT_ASSET_FINISH";
+const BROWSER_ATTACHMENT_ABORT = "SAVE_TAB_CONTEXT_ASSET_ABORT";
+const BROWSER_ATTACHMENT_REMOVE = "SAVE_TAB_CONTEXT_ASSET_REMOVE";
+
+type BrowserAttachmentMessage =
+  | { type: typeof BROWSER_ATTACHMENT_CREATE; fileName: string }
+  | {
+      type: typeof BROWSER_ATTACHMENT_APPEND_CHUNK;
+      assetId: string;
+      dataBase64: string;
+    }
+  | { type: typeof BROWSER_ATTACHMENT_FINISH; assetId: string }
+  | { type: typeof BROWSER_ATTACHMENT_ABORT; assetId: string }
+  | { type: typeof BROWSER_ATTACHMENT_REMOVE; assetId: string };
+
 function openBrowserFilePicker({
   allowMultiple,
   imagesOnly,
@@ -82,7 +105,7 @@ function openBrowserFilePicker({
   });
 }
 
-async function uploadFiles(files: File[]) {
+export async function uploadFiles(files: File[]): Promise<UploadedFile[]> {
   if (files.length === 0) {
     return [];
   }
@@ -103,7 +126,10 @@ async function uploadFiles(files: File[]) {
     throw new Error(`Upload failed: ${response.status} ${response.statusText}`);
   }
 
-  return (await response.json()).files;
+  const { files: uploadedFiles } = (await response.json()) as {
+    files: UploadedFile[];
+  };
+  return uploadedFiles;
 }
 
 export async function handleLocalFilePickerMessage(message: CodexFetchMessage) {
@@ -122,6 +148,43 @@ export async function handleLocalFilePickerMessage(message: CodexFetchMessage) {
       status: 432,
       error: errorMessage(error),
     });
+  }
+}
+
+export async function handleBrowserRuntimeMessage(
+  value: unknown,
+): Promise<unknown> {
+  try {
+    const message = parseBrowserAttachmentMessage(value);
+
+    switch (message.type) {
+      case BROWSER_ATTACHMENT_CREATE:
+        return postBackendJson("/__backend/staged-upload/create", {
+          fileName: message.fileName,
+        });
+
+      case BROWSER_ATTACHMENT_APPEND_CHUNK:
+        return postBackendJson("/__backend/staged-upload/append", {
+          assetId: message.assetId,
+          dataBase64: message.dataBase64,
+        });
+
+      case BROWSER_ATTACHMENT_FINISH:
+        return postBackendJson("/__backend/staged-upload/finish", {
+          assetId: message.assetId,
+        });
+
+      case BROWSER_ATTACHMENT_ABORT:
+      case BROWSER_ATTACHMENT_REMOVE:
+        return postBackendJson("/__backend/staged-upload/remove", {
+          assetId: message.assetId,
+        });
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: errorMessage(error),
+    };
   }
 }
 
@@ -154,6 +217,45 @@ export function isLocalFilePickerMessage(
     (value.url === "vscode://codex/pick-files" ||
       value.url === "vscode://codex/pick-file")
   );
+}
+
+function parseBrowserAttachmentMessage(
+  value: unknown,
+): BrowserAttachmentMessage {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throw new Error("Unsupported browser runtime message");
+  }
+
+  switch (value.type) {
+    case BROWSER_ATTACHMENT_CREATE:
+      if (typeof value.fileName === "string") {
+        return { type: value.type, fileName: value.fileName };
+      }
+      break;
+
+    case BROWSER_ATTACHMENT_APPEND_CHUNK:
+      if (
+        typeof value.assetId === "string" &&
+        typeof value.dataBase64 === "string"
+      ) {
+        return {
+          type: value.type,
+          assetId: value.assetId,
+          dataBase64: value.dataBase64,
+        };
+      }
+      break;
+
+    case BROWSER_ATTACHMENT_FINISH:
+    case BROWSER_ATTACHMENT_ABORT:
+    case BROWSER_ATTACHMENT_REMOVE:
+      if (typeof value.assetId === "string") {
+        return { type: value.type, assetId: value.assetId };
+      }
+      break;
+  }
+
+  throw new Error("Unsupported browser runtime message");
 }
 
 function parsePickFilesRequest(message: CodexFetchMessage): PickFilesRequest {
@@ -208,6 +310,23 @@ function sendFetchResponse(
         };
 
   emitRendererEvent("codex_desktop:message-for-view", [payload]);
+}
+
+async function postBackendJson(
+  pathname: string,
+  body: unknown,
+): Promise<unknown> {
+  const response = await fetch(new URL(pathname, window.location.href), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
 function errorMessage(error: unknown): string {
