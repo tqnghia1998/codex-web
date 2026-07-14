@@ -103,7 +103,8 @@ browser assets.
 
 If an upstream update changes bundle names or minified code shapes, update the
 matching rewrite in `scripts/prepare_asar`. `DEV=1 npm run setup` still pretties
-`scratch/asar` for manual inspection.
+`scratch/asar` for manual inspection. See `PATCHES.md` for the full patch/rewrite
+ledger and what each historical patch now maps to.
 
 Validate the result by starting the server and opening the browser UI.
 
