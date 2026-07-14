@@ -209,44 +209,9 @@ PY
 python3 - <<'PY'
 from pathlib import Path
 
-replacement = "function Fve(){let e=(0,m1.useCallback)(()=>null,[]),t=(0,m1.useCallback)(async()=>{},[]),n=(0,m1.useCallback)(async()=>({status:`dropped`,reason:`Structured analytics disabled`,statsigUser:null}),[]);return(0,m1.useMemo)(()=>({flush:t,getStatsigUserSnapshot:e,trackCounter:t,trackStructuredEvent:n}),[t,e,n])}"
-patched = False
-for path in Path("scratch/asar/webview/assets").glob("*.js"):
-    source = path.read_text(errors="ignore")
-    if "https://chatgpt.com/ces/v1/rgstr" not in source:
-        continue
-    start = source.find("function Fve({appVersion:e,client:t,deviceId:n,enabled:r}){")
-    end = source.find("function Ive(e){", start)
-    if start == -1 or end == -1:
-        continue
-    path.write_text(source[:start] + replacement + source[end:])
-    print(f"disabled structured analytics in {path}")
-    patched = True
-
-if not patched:
-    print("Warning: could not disable renderer structured analytics", flush=True)
-PY
-
-python3 - <<'PY'
-from pathlib import Path
-
-path = Path("scratch/asar/.vite/build/src-HagpvBpE.js")
-source = path.read_text(errors="ignore")
-needle = "AY=`https://chat.openai.com/ces/v1/telemetry/intake`,jY=`dummy-token`,MY=2e3,NY=3e4,PY=5,FY=!1,IY=class{batcher;fetchImpl;queue=[];disabled=!1;"
-replacement = "AY=`https://chat.openai.com/ces/v1/telemetry/intake`,jY=`dummy-token`,MY=2e3,NY=3e4,PY=5,FY=!1,IY=class{batcher;fetchImpl;queue=[];disabled=!0;"
-if needle in source:
-    path.write_text(source.replace(needle, replacement, 1))
-else:
-    print("Warning: could not disable shell telemetry transport", flush=True)
-PY
-
-python3 - <<'PY'
-from pathlib import Path
-
 index_html = Path("scratch/asar/webview/index.html").read_text(errors="ignore")
 asset_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("*.js")]
 index_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("index-*.js")]
-shell_source = Path("scratch/asar/.vite/build/src-HagpvBpE.js").read_text(errors="ignore")
 
 checks = {
     "base href injection": '<base href="/" />' in index_html,
@@ -254,8 +219,6 @@ checks = {
     "bootstrap preload import": any('await import("./preload.js?v=8")' in source for source in index_sources),
     "initial route shim": any('window.__ELECTRON_SHIM__?.initialRoute??`/`' in source for source in asset_sources),
     "app-host shim": any('window.__ELECTRON_SHIM__?.services!=null' in source for source in asset_sources),
-    "renderer analytics disabled": any('Structured analytics disabled' in source for source in asset_sources),
-    "shell telemetry disabled": 'IY=class{batcher;fetchImpl;queue=[];disabled=!0;' in shell_source,
 }
 
 missing = [name for name, ok in checks.items() if not ok]
