@@ -80,12 +80,14 @@ const asarRoot = resolveAsarRoot();
 type RendererToMainMessage =
   | {
       type: "ipc-renderer-invoke";
+      clientId: string;
       requestId: string;
       channel: string;
       args: unknown[];
     }
   | {
       type: "ipc-renderer-send";
+      clientId: string;
       channel: string;
       args: unknown[];
     }
@@ -107,6 +109,7 @@ type RendererToMainMessage =
     }
   | {
       type: "workspace-directory-entries-request";
+      clientId: string;
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
@@ -420,6 +423,20 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   const app = Fastify({ logger: false });
   const websocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
+  const clientSockets = new Map<string, WebSocket>();
+
+  function sendToClient(
+    clientId: string | undefined,
+    fallbackSocket: WebSocket,
+    message: MainToRendererMessage,
+  ): void {
+    const targetSocket =
+      (clientId ? clientSockets.get(clientId) : undefined) ?? fallbackSocket;
+    if (targetSocket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    targetSocket.send(JSON.stringify(message));
+  }
 
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "OPTIONS") {
@@ -546,10 +563,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
     socket.on("close", () => {
       sockets.delete(socket);
-      for (const port of messagePorts.values()) {
-        port.disconnect();
+      for (const [clientId, clientSocket] of clientSockets) {
+        if (clientSocket === socket) {
+          clientSockets.delete(clientId);
+        }
       }
-      messagePorts.clear();
     });
 
     socket.on("message", (rawData) => {
@@ -560,6 +578,8 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
         console.error("[ipc-bridge] invalid JSON payload", error);
         return;
       }
+
+      clientSockets.set(message.clientId, socket);
 
       if (message.type === "ipc-renderer-send") {
         bridgeState.handleRendererSend?.(message.channel, message.args);
@@ -610,35 +630,29 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       }
 
       if (message.type === "workspace-directory-entries-request") {
-        const { requestId } = message;
+        const { clientId, requestId } = message;
         getWorkspaceDirectoryEntries(message)
           .then((result) => {
-            const payload: MainToRendererMessage = {
+            sendToClient(clientId, socket, {
               type: "workspace-directory-entries-result",
               requestId,
               ok: true,
               result,
-            };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            });
           })
           .catch((error) => {
-            const payload: MainToRendererMessage = {
+            sendToClient(clientId, socket, {
               type: "workspace-directory-entries-result",
               requestId,
               ok: false,
               errorMessage: errorMessage(error),
-            };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            });
           });
         return;
       }
 
       if (message.type === "ipc-renderer-invoke") {
-        const { channel, requestId, args } = message;
+        const { clientId, channel, requestId, args } = message;
         Promise.resolve(
           bridgeState.handleRendererInvoke?.(channel, args) ??
             Promise.reject(
@@ -648,26 +662,20 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
             ),
         )
           .then((result) => {
-            const payload: MainToRendererMessage = {
+            sendToClient(clientId, socket, {
               type: "ipc-renderer-invoke-result",
               requestId,
               ok: true,
               result,
-            };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            });
           })
           .catch((error) => {
-            const payload: MainToRendererMessage = {
+            sendToClient(clientId, socket, {
               type: "ipc-renderer-invoke-result",
               requestId,
               ok: false,
               errorMessage: errorMessage(error),
-            };
-            if (socket.readyState === WebSocket.OPEN) {
-              socket.send(JSON.stringify(payload));
-            }
+            });
           });
       }
     });
