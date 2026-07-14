@@ -43,22 +43,37 @@ The server listens on `127.0.0.1:8214`. Change the port with:
 npm run run -- --port 9000
 ```
 
-To build one runnable server file:
+To build a runnable `dist/` folder:
 
 ```bash
 npm run build
 node dist/codex-web.js --port 9000
 ```
 
-`dist/codex-web.js` is now self-contained. It embeds the patched `scratch/asar`
-tree and extracts it to a cache directory under your macOS temp folder on first
-run. You can still override that with an existing extracted app:
+The build now writes everything needed into `dist/`:
+
+- `dist/codex-web.js`
+- `dist/server.cjs`
+- `dist/asar/`
+- `dist/node_modules/`
+
+Keep that folder together when you copy or deploy it. You can still override
+the bundled app files with an existing extracted app:
 
 ```bash
-CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node codex-web.js --port 9000
+CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node dist/codex-web.js --port 9000
 ```
 
 Set `CODEX_CLI_PATH` too if you want a specific Codex CLI binary.
+
+Run a quick smoke check against the built `dist/` server with:
+
+```bash
+npm run smoke
+```
+
+It starts `dist/codex-web.js` on a random localhost port and checks `/`,
+`/assets/preload.js`, `/?folder=...`, file upload, and the IPC websocket.
 
 Open <http://127.0.0.1:8214>. To start with a folder selected, URL-encode its
 path:
