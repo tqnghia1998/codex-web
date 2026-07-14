@@ -1,6 +1,8 @@
 import Module from "node:module";
 import electronModule from "./electron/index";
 
+const electronModuleExports = { ...electronModule, default: electronModule };
+
 export function installModuleAliasHook(): void {
   const moduleWithLoad = Module as typeof Module & {
     _load: (
@@ -17,7 +19,7 @@ export function installModuleAliasHook(): void {
     isMain: boolean,
   ): unknown {
     if (request === "electron") {
-      return { ...electronModule, default: electronModule };
+      return electronModuleExports;
     }
 
     return originalLoad.call(this, request, parent, isMain);

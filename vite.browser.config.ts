@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
@@ -11,6 +11,7 @@ const preloadEntryPath = path.resolve(
   "scratch/asar/.vite/build/preload.js",
 );
 const browserNodeEnv = process.env.NODE_ENV ?? "production";
+const debugBuild = process.env.DEV === "1" || process.env.DEV === "true";
 const asarPackageJson = JSON.parse(readFileSync(asarPackagePath, "utf8")) as {
   version?: unknown;
 };
@@ -40,6 +41,18 @@ export default defineConfig({
       },
     },
   },
+  plugins: debugBuild
+    ? []
+    : [
+        {
+          name: "remove-stale-preload-sourcemap",
+          closeBundle() {
+            rmSync(path.resolve(webviewRoot, "assets/preload.js.map"), {
+              force: true,
+            });
+          },
+        },
+      ],
   resolve: {
     alias: {
       electron: path.resolve(configDir, "src/browser/shim.ts"),
@@ -52,9 +65,9 @@ export default defineConfig({
       transformMixedEsModules: true,
     },
     emptyOutDir: false,
-    minify: false,
+    minify: debugBuild ? false : "esbuild",
     outDir: path.resolve(webviewRoot, "assets"),
-    sourcemap: true,
+    sourcemap: debugBuild,
     lib: {
       entry: preloadEntryPath,
       fileName: () => "preload.js",

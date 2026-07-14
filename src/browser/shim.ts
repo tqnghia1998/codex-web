@@ -89,6 +89,7 @@ type MainToRendererMessage =
     };
 
 const RECONNECT_DELAY_MS = 1_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
@@ -138,6 +139,7 @@ const pendingInvokes = new Map<
   {
     reject: (reason?: unknown) => void;
     resolve: (value: unknown) => void;
+    timeoutId: number;
   }
 >();
 const pendingDirectoryEntries = new Map<
@@ -145,6 +147,7 @@ const pendingDirectoryEntries = new Map<
   {
     reject: (reason?: unknown) => void;
     resolve: (value: WorkspaceDirectoryEntries) => void;
+    timeoutId: number;
   }
 >();
 const rendererListeners = new Map<string, Set<IpcListener>>();
@@ -166,6 +169,10 @@ export function emitRendererEvent(channel: string, args: unknown[]): void {
   }
 }
 
+function timeoutError(kind: string): Error {
+  return new Error(`[electron-stub] timed out waiting for ${kind}`);
+}
+
 function handleIncomingMessage(message: MainToRendererMessage): void {
   if (message.type === "ipc-main-event") {
     emitRendererEvent(message.channel, message.args);
@@ -178,6 +185,7 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
       return;
     }
     pendingInvokes.delete(message.requestId);
+    window.clearTimeout(pending.timeoutId);
     if (message.ok) {
       pending.resolve(message.result);
       return;
@@ -204,6 +212,7 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
       return;
     }
     pendingDirectoryEntries.delete(message.requestId);
+    window.clearTimeout(pending.timeoutId);
     if (message.ok) {
       pending.resolve(message.result);
       return;
@@ -283,7 +292,14 @@ function nextRequestId(): string {
 function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
-    pendingInvokes.set(requestId, { resolve, reject });
+    const timeoutId = window.setTimeout(() => {
+      if (!pendingInvokes.delete(requestId)) {
+        return;
+      }
+      reject(timeoutError(`IPC invoke response for ${channel}`));
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingInvokes.set(requestId, { resolve, reject, timeoutId });
     enqueueMessage({
       type: "ipc-renderer-invoke",
       requestId,
@@ -339,7 +355,14 @@ function requestWorkspaceDirectoryEntries(
 ): Promise<WorkspaceDirectoryEntries> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
-    pendingDirectoryEntries.set(requestId, { resolve, reject });
+    const timeoutId = window.setTimeout(() => {
+      if (!pendingDirectoryEntries.delete(requestId)) {
+        return;
+      }
+      reject(timeoutError("workspace directory entries"));
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingDirectoryEntries.set(requestId, { resolve, reject, timeoutId });
     enqueueMessage({
       type: "workspace-directory-entries-request",
       requestId,
@@ -386,11 +409,13 @@ electronShim.overrideAdapter = {
   },
 };
 
+const folderToAdd = new URLSearchParams(window.location.search).get("folder")?.trim();
 const initialRoute = mapBrowserPathToInitialRoute(
   window.location.pathname,
   window.location.search,
 );
 electronShim.initialRoute = initialRoute.memoryPath;
+electronShim.folderFilterProjectId = folderToAdd || undefined;
 
 if (initialRoute.browserPath) {
   window.history.pushState(undefined, "", initialRoute.browserPath);
@@ -408,13 +433,11 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
 
   if (
     navigation.action !== "POP" &&
-const folderToAdd = new URLSearchParams(window.location.search).get("folder")?.trim();
     mobileMediaQuery.matches &&
     shouldCloseSidebarForMemoryPath(path)
   ) {
     electronShim.closeSidebar?.();
   }
-electronShim.folderFilterProjectId = folderToAdd || undefined;
 
   const browserPath = mapMemoryPathToBrowserPath(path);
   if (browserPath == null) {

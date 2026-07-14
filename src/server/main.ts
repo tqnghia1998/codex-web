@@ -12,6 +12,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { parseArgs as parseCliArgs } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
 import Fastify from "fastify";
@@ -367,22 +368,20 @@ async function getWorkspaceDirectoryEntries({
     throw new Error(`Directory not found: ${requestedPath}`);
   }
 
-  const entries = (await fs.readdir(resolvedPath, { withFileTypes: true }))
-    .flatMap((entry): WorkspaceDirectoryEntry[] => {
-      const type = entry.isDirectory() ? "directory" : "file";
-      if (directoriesOnly && type !== "directory") {
-        return [];
-      }
+  const entries: WorkspaceDirectoryEntry[] = [];
+  for (const entry of await fs.readdir(resolvedPath, { withFileTypes: true })) {
+    const type = entry.isDirectory() ? "directory" : "file";
+    if (directoriesOnly && type !== "directory") {
+      continue;
+    }
 
-      return [
-        {
-          name: entry.name,
-          path: path.join(resolvedPath, entry.name),
-          type,
-        },
-      ];
-    })
-    .sort(compareWorkspaceDirectoryEntries);
+    entries.push({
+      name: entry.name,
+      path: path.join(resolvedPath, entry.name),
+      type,
+    });
+  }
+  entries.sort(compareWorkspaceDirectoryEntries);
 
   const rootPath = path.parse(resolvedPath).root;
   const parentPath =
@@ -423,8 +422,8 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   const sockets = new Set<WebSocket>();
 
   app.addHook("onRequest", async (request, reply) => {
-    applyCorsHeaders(reply);
     if (request.method === "OPTIONS") {
+      applyCorsHeaders(reply);
       return reply.code(204).send();
     }
   });
@@ -456,7 +455,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
 
           const uploadedPath = path.join(uploadRoot, randomUUID());
 
-          await fs.writeFile(uploadedPath, await part.toBuffer());
+          await pipeline(part.file, fsSync.createWriteStream(uploadedPath));
 
           yield {
             label,
@@ -474,17 +473,13 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     root: "/",
     prefix: "/@fs/",
     decorateReply: false,
-    setHeaders: (response) => {
-      applyRawCorsHeaders(response);
-    },
+    setHeaders: applyRawCorsHeaders,
   });
 
   await app.register(fastifyStatic, {
     root: path.join(asarRoot, "webview"),
     prefix: "/",
-    setHeaders: (response) => {
-      applyRawCorsHeaders(response);
-    },
+    setHeaders: applyRawCorsHeaders,
   });
 
   app.get("/", async (_request, reply) => {

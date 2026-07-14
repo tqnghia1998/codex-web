@@ -33,6 +33,7 @@ function WorkspaceRootDialog({
   const [directoryPath, setDirectoryPath] = useState<string | null>(null);
   const [userSelectedPath, setUserSelectedPath] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
+  const directoryCacheRef = useRef(new Map<string, WorkspaceDirectoryEntries>());
 
   const [directoryData, setDirectoryData] =
     useState<WorkspaceDirectoryEntries | null>(null);
@@ -40,13 +41,24 @@ function WorkspaceRootDialog({
   const [queryError, setQueryError] = useState<string | null>(null);
 
   useEffect(() => {
+    const cacheKey = directoryPath?.trim() || "";
+    const cached = directoryCacheRef.current.get(cacheKey);
+    if (cached) {
+      setDirectoryData(cached);
+      setIsBusy(false);
+      setQueryError(null);
+      return;
+    }
+
     let active = true;
+    setDirectoryData(null);
     setIsBusy(true);
     setQueryError(null);
 
     listDirectory(directoryPath)
       .then((data) => {
         if (active) {
+          directoryCacheRef.current.set(cacheKey, data);
           setDirectoryData(data);
           setIsBusy(false);
         }
@@ -89,7 +101,7 @@ function WorkspaceRootDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const selectedPath = userSelectedPath ?? directoryQuery.data?.directoryPath;
+  const selectedPath = userSelectedPath ?? directoryData?.directoryPath;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
