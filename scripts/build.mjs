@@ -21,44 +21,46 @@ if (!serverSource) {
 }
 
 const distDir = path.resolve("dist");
-const stagedAsarRoot = path.resolve("scratch/asar");
+const buildRequire = createRequire(import.meta.url);
 
-function resolveElectronMainEntry(asarRoot) {
-  const buildDirectory = path.join(asarRoot, ".vite/build");
-  const matches = fs.readdirSync(buildDirectory).filter((name) =>
-    /^main-.+\.js$/.test(name),
-  );
-
-  if (matches.length === 0) {
-    throw new Error(`no main bundle found in ${buildDirectory}`);
+function collectPackageTree(packageName, seen = new Set()) {
+  const packageJsonPath = buildRequire.resolve(`${packageName}/package.json`);
+  if (seen.has(packageJsonPath)) {
+    return [];
   }
+  seen.add(packageJsonPath);
 
-  if (matches.length > 1) {
-    throw new Error(`multiple main bundles found in ${buildDirectory}`);
-  }
+  const packageRoot = path.dirname(packageJsonPath);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  const dependencies = Object.keys(packageJson.dependencies ?? {});
 
-  return path.join(buildDirectory, matches[0]);
+  return [
+    packageRoot,
+    ...dependencies.flatMap((dependencyName) =>
+      collectPackageTree(dependencyName, seen),
+    ),
+  ];
 }
-
-function assertStagedNativeModules(asarRoot) {
-  const mainEntryPath = resolveElectronMainEntry(asarRoot);
-  try {
-    createRequire(mainEntryPath).resolve("better-sqlite3");
-  } catch (error) {
-    throw new Error(
-      [
-        `staged app cannot resolve better-sqlite3 from ${mainEntryPath}.`,
-        "Run npm run setup, or point CODEX_ASAR_DIR at a prepared scratch/asar directory.",
-        error instanceof Error ? error.message : String(error),
-      ].join(" "),
-    );
-  }
-}
-
-assertStagedNativeModules(stagedAsarRoot);
 
 fs.rmSync(distDir, { recursive: true, force: true });
 fs.mkdirSync(distDir, { recursive: true });
+
+const runtimePackageRoots = collectPackageTree("better-sqlite3");
+const runtimePackageArchiveEntries = runtimePackageRoots.map((packageRoot) =>
+  path.relative(path.resolve("node_modules"), packageRoot),
+);
+const runtimePackageArchivePath = path.join(distDir, "runtime-node-modules.tgz");
+execFileSync("tar", [
+  "-chzf",
+  runtimePackageArchivePath,
+  "-C",
+  "node_modules",
+  ...runtimePackageArchiveEntries,
+]);
+const runtimePackageArchiveHash = createHash("sha256")
+  .update(fs.readFileSync(runtimePackageArchivePath))
+  .digest("hex")
+  .slice(0, 16);
 
 const asarArchivePath = path.join(distDir, "asar.tgz");
 execFileSync("tar", ["-czf", asarArchivePath, "-C", "scratch", "asar"]);
@@ -86,18 +88,81 @@ const { execFileSync } = require("node:child_process");
 const distRoot = path.dirname(fs.realpathSync(process.argv[1]));
 const serverPath = path.join(distRoot, "server.cjs");
 const bundledAsarArchivePath = path.join(distRoot, "asar.tgz");
+const bundledRuntimeNodeModulesArchivePath = path.join(distRoot, "runtime-node-modules.tgz");
 const asarCacheRoot = path.join(os.tmpdir(), "codex-web-asar-${asarArchiveHash}");
 const extractedAsarRoot = path.join(asarCacheRoot, "asar");
+const vendorCacheRoot = path.join(os.tmpdir(), "codex-web-vendor-${runtimePackageArchiveHash}");
+const bundledNodeModulesRoot = path.join(vendorCacheRoot, "node_modules");
+const bundledBetterSqlitePackageDir = path.join(bundledNodeModulesRoot, "better-sqlite3");
+const bundledBetterSqlitePackageJson = path.join(bundledBetterSqlitePackageDir, "package.json");
 
-if (!fs.existsSync(path.join(extractedAsarRoot, "package.json"))) {
-  fs.rmSync(asarCacheRoot, { recursive: true, force: true });
-  fs.mkdirSync(asarCacheRoot, { recursive: true });
-  execFileSync("tar", ["-xzf", bundledAsarArchivePath, "-C", asarCacheRoot], {
+function probeBetterSqlite3() {
+  const Database = require(bundledBetterSqlitePackageDir);
+  const db = new Database(":memory:");
+  db.close();
+}
+
+function extractArchive(archivePath, destinationRoot) {
+  fs.rmSync(destinationRoot, { recursive: true, force: true });
+  fs.mkdirSync(destinationRoot, { recursive: true });
+  execFileSync("tar", ["-xzf", archivePath, "-C", destinationRoot], {
     stdio: "inherit",
   });
 }
 
+function runNpm(args) {
+  if (process.env.npm_execpath) {
+    execFileSync(process.execPath, [process.env.npm_execpath, ...args], {
+      stdio: "inherit",
+    });
+    return;
+  }
+
+  execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", args, {
+    stdio: "inherit",
+  });
+}
+
+function ensureBetterSqlite3Binary() {
+  try {
+    probeBetterSqlite3();
+    return;
+  } catch (firstError) {
+    fs.writeFileSync(
+      path.join(vendorCacheRoot, "package.json"),
+      JSON.stringify({ private: true }, null, 2) + "\\n",
+    );
+    runNpm(["rebuild", "better-sqlite3", "--foreground-scripts", "--prefix", vendorCacheRoot]);
+    try {
+      probeBetterSqlite3();
+      return;
+    } catch (secondError) {
+      throw new Error(
+        [
+          "Failed to prepare better-sqlite3 for the current Node runtime.",
+          secondError instanceof Error ? secondError.stack || secondError.message : String(secondError),
+          "Initial load error:",
+          firstError instanceof Error ? firstError.stack || firstError.message : String(firstError),
+        ].join("\\n\\n"),
+      );
+    }
+  }
+}
+
+if (!fs.existsSync(path.join(extractedAsarRoot, "package.json"))) {
+  extractArchive(bundledAsarArchivePath, asarCacheRoot);
+}
+
+if (!fs.existsSync(bundledBetterSqlitePackageJson)) {
+  fs.mkdirSync(bundledNodeModulesRoot, { recursive: true });
+  execFileSync("tar", ["-xzf", bundledRuntimeNodeModulesArchivePath, "-C", bundledNodeModulesRoot], {
+    stdio: "inherit",
+  });
+}
+
+ensureBetterSqlite3Binary();
 process.env.CODEX_ASAR_DIR = process.env.CODEX_ASAR_DIR || extractedAsarRoot;
+process.env.CODEX_VENDOR_NODE_MODULES_DIR = bundledNodeModulesRoot;
 require(serverPath);
 `;
 

@@ -10,7 +10,6 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -713,20 +712,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     throw new Error("multiple main bundles found");
   }
 
-  const mainEntryPath = path.join(buildDirectory, matches[0]!);
-  try {
-    createRequire(mainEntryPath).resolve("better-sqlite3");
-  } catch (error) {
-    throw new Error(
-      [
-        `better-sqlite3 not found from ${mainEntryPath}.`,
-        "Run npm run setup, or point CODEX_ASAR_DIR at a prepared scratch/asar directory.",
-        error instanceof Error ? error.message : String(error),
-      ].join(" "),
-    );
-  }
-
-  const module = require(mainEntryPath);
+  const module = require(path.join(buildDirectory, matches[0]!));
   module.runMainAppStartup();
 }
 
