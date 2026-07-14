@@ -177,6 +177,7 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     if "getSentryInitOptions" not in source:
         continue
     source = source.replace("Vk({beforeSend:", "Vk({enabled:!1,beforeSend:", 1)
+    source = source.replace("Ngn({beforeSend:", "Ngn({enabled:!1,beforeSend:", 1)
     path.write_text(source)
 PY
 
