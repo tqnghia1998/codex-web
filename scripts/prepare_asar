@@ -80,14 +80,40 @@ from pathlib import Path
 
 index = Path("scratch/asar/webview/index.html")
 source = index.read_text()
-source, count = re.subn(
+source, _ = re.subn(
     r"\s*<meta\s+http-equiv=[\"']Content-Security-Policy[\"'][^>]*>",
     "",
     source,
     flags=re.IGNORECASE,
 )
-if count:
-    index.write_text(source)
+if '<base href="/"' not in source:
+    source = source.replace(
+        "<!-- PROD_BASE_TAG_HERE -->",
+        "<!-- PROD_BASE_TAG_HERE -->\n    <base href=\"/\" />",
+        1,
+    )
+if 'src="./assets/preload.js?v=8"' not in source:
+    source = source.replace(
+        "<!-- PROD_CSP_TAG_HERE -->",
+        "<!-- PROD_CSP_TAG_HERE -->\n    <script type=\"module\" src=\"./assets/preload.js?v=8\"></script>",
+        1,
+    )
+index.write_text(source)
+PY
+
+python3 - <<'PY'
+from pathlib import Path
+
+for path in Path("scratch/asar/webview/assets").glob("index-*.js"):
+    source = path.read_text(errors="ignore")
+    updated = source.replace(
+        "await e((async()=>{t(),i(),await a()}))();",
+        'await e((async()=>{window.electronBridge||await import("./preload.js?v=8"),t(),i(),await a()}))();',
+        1,
+    )
+    if updated != source:
+        path.write_text(updated)
+        print(f"patched bootstrap preload in {path}")
 PY
 
 python3 - <<'PY'
@@ -132,21 +158,13 @@ from pathlib import Path
 
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    if "connect-app-host" not in source:
-        continue
-    source, count = re.subn(
-        r"mTe=new pTe\(\{appActions:wb,appUpdates:tTe,downloads:dTe\}\)",
-        "mTe=new pTe({...window.__ELECTRON_SHIM__?.services,appActions:wb,appUpdates:tTe,downloads:dTe,requestUserInputAutoResolution:{recordConversationActivity:()=>undefined,setConversationPresented:()=>undefined,snooze:()=>undefined}})",
-        source,
-        count=1,
+    original = source
+    source = source.replace(
+        "function DZe(){dC=EZe(),fC=await dC.services,fC.devboxService}",
+        "function DZe(){if(window.__ELECTRON_SHIM__?.services!=null){dC={services:Promise.resolve(window.__ELECTRON_SHIM__.services)},fC=window.__ELECTRON_SHIM__.services,fC.devboxService;return}dC=EZe(),fC=await dC.services,fC.devboxService}",
+        1,
     )
-    source, route_count = re.subn(
-        r"async function _Te\(\)\{Nb=gTe\(\),Pb=await Nb\.services,Pb\.devboxService\}",
-        "async function _Te(){if(window.__ELECTRON_SHIM__!=null){Nb=mTe,Pb=mTe.services,Pb.devboxService;return}Nb=gTe(),Pb=await Nb.services,Pb.devboxService}",
-        source,
-        count=1,
-    )
-    if count or route_count:
+    if source != original:
         path.write_text(source)
         print(f"patched app-host services in {path}")
 
@@ -170,6 +188,7 @@ PY
 done < <(grep -rlF "Sentry SDK should be initialized before the Electron app" scratch/asar/.vite/build --include='*.js' || true)
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
@@ -178,10 +197,11 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
         continue
     source = source.replace("Vk({beforeSend:", "Vk({enabled:!1,beforeSend:", 1)
     source = source.replace("Ngn({beforeSend:", "Ngn({enabled:!1,beforeSend:", 1)
-    source = source.replace(
-        "function Ign(){if(Bgn)return;Bgn=!0;",
-        "function Ign(){return}",
-        1,
+    source, count = re.subn(
+        r"function ([A-Za-z0-9_$]+)\(\)\{if\(([A-Za-z0-9_$]+)\)return;\2=!0;let e=window\.electronBridge\?\.getSentryInitOptions\?\.\(\);if\(!e\)return;.*?Jvt\([A-Za-z0-9_$]+\)\}",
+        lambda match: f"function {match.group(1)}(){{}}",
+        source,
+        count=1,
     )
     path.write_text(source)
 PY

@@ -202,6 +202,17 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
   return event;
 }
 
+function normalizeInvokeArgs(channel: string, args: unknown[]): unknown[] {
+  if (
+    channel === "codex_desktop:get-fast-mode-rollout-metrics" &&
+    (args.length === 0 || args[0] == null)
+  ) {
+    return [{ params: {} }];
+  }
+
+  return args;
+}
+
 function createIpcMainStub(): {
   handle: (
     channel: string,
@@ -247,7 +258,9 @@ function createIpcMainStub(): {
       throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
     }
     const event = createIpcMainEvent();
-    return await Promise.resolve(handler(event, ...args));
+    return await Promise.resolve(
+      handler(event, ...normalizeInvokeArgs(channel, args)),
+    );
   };
 
   bridgeState.handleRendererSend = (
