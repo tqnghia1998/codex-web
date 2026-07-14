@@ -50,8 +50,15 @@ npm run build
 node dist/codex-web.js --port 9000
 ```
 
-The bundled server uses `scratch/asar` by default. Set `CODEX_ASAR_DIR` to use
-another extracted app, and `CODEX_CLI_PATH` to use a specific Codex CLI binary.
+The bundled server still needs the patched app files from `scratch/asar`.
+When you copy `codex-web.js` somewhere else, either copy `scratch/asar` next to
+it (or one directory above it), or point at an existing extracted app:
+
+```bash
+CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node codex-web.js --port 9000
+```
+
+Set `CODEX_CLI_PATH` too if you want a specific Codex CLI binary.
 
 Open <http://127.0.0.1:8214>. To start with a folder selected, URL-encode its
 path:
