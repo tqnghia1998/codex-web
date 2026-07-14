@@ -27,25 +27,46 @@ execFileSync("tar", ["-czf", archivePath, "-C", "scratch", "asar"]);
 const archiveBuffer = fs.readFileSync(archivePath);
 fs.rmSync(archivePath, { force: true });
 
-const require = createRequire(import.meta.url);
-const betterSqlite3Root = path.dirname(
-  require.resolve("better-sqlite3/package.json"),
+const buildRequire = createRequire(import.meta.url);
+
+function collectPackageTree(packageName, seen = new Set()) {
+  const packageJsonPath = buildRequire.resolve(`${packageName}/package.json`);
+  if (seen.has(packageJsonPath)) {
+    return [];
+  }
+  seen.add(packageJsonPath);
+
+  const packageRoot = path.dirname(packageJsonPath);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  const dependencies = Object.keys(packageJson.dependencies ?? {});
+
+  return [
+    packageRoot,
+    ...dependencies.flatMap((dependencyName) =>
+      collectPackageTree(dependencyName, seen),
+    ),
+  ];
+}
+
+const runtimePackageRoots = collectPackageTree("better-sqlite3");
+const runtimePackageArchiveEntries = runtimePackageRoots.map((packageRoot) =>
+  path.relative(path.resolve("node_modules"), packageRoot),
 );
-const betterSqlite3ArchivePath = path.join("dist", "better-sqlite3.tgz");
+const runtimePackageArchivePath = path.join("dist", "runtime-node-modules.tgz");
 execFileSync("tar", [
   "-chzf",
-  betterSqlite3ArchivePath,
+  runtimePackageArchivePath,
   "-C",
-  path.dirname(betterSqlite3Root),
-  path.basename(betterSqlite3Root),
+  "node_modules",
+  ...runtimePackageArchiveEntries,
 ]);
-const betterSqlite3ArchiveBuffer = fs.readFileSync(betterSqlite3ArchivePath);
-fs.rmSync(betterSqlite3ArchivePath, { force: true });
+const runtimePackageArchiveBuffer = fs.readFileSync(runtimePackageArchivePath);
+fs.rmSync(runtimePackageArchivePath, { force: true });
 
 const buildHash = createHash("sha256")
   .update(serverSource)
   .update(archiveBuffer)
-  .update(betterSqlite3ArchiveBuffer)
+  .update(runtimePackageArchiveBuffer)
   .digest("hex")
   .slice(0, 16);
 
@@ -66,7 +87,7 @@ const { spawn, execFileSync } = require("node:child_process");
 const buildHash = ${JSON.stringify(buildHash)};
 const serverSource = ${JSON.stringify(serverSource)};
 const archiveBase64 = ${JSON.stringify(archiveBuffer.toString("base64"))};
-const betterSqlite3ArchiveBase64 = ${JSON.stringify(betterSqlite3ArchiveBuffer.toString("base64"))};
+const runtimePackageArchiveBase64 = ${JSON.stringify(runtimePackageArchiveBuffer.toString("base64"))};
 
 const cacheRoot = path.join(os.tmpdir(), "codex-web-bundle-" + buildHash);
 const serverPath = path.join(cacheRoot, "server.cjs");
@@ -96,15 +117,15 @@ if (!process.env.CODEX_ASAR_DIR && !fs.existsSync(path.join(embeddedAsarRoot, "p
 }
 
 if (!fs.existsSync(path.join(embeddedNodeModulesRoot, "better-sqlite3", "package.json"))) {
-  const archivePath = path.join(cacheRoot, "better-sqlite3.tgz");
+  const archivePath = path.join(cacheRoot, "runtime-node-modules.tgz");
   fs.mkdirSync(embeddedNodeModulesRoot, { recursive: true });
   fs.rmSync(path.join(embeddedNodeModulesRoot, "better-sqlite3"), { recursive: true, force: true });
-  fs.writeFileSync(archivePath, Buffer.from(betterSqlite3ArchiveBase64, "base64"));
+  fs.writeFileSync(archivePath, Buffer.from(runtimePackageArchiveBase64, "base64"));
   try {
     execFileSync("tar", ["-xzf", archivePath, "-C", embeddedNodeModulesRoot]);
   } catch (error) {
     throw new Error(
-      "Failed to extract embedded better-sqlite3 with tar. " +
+      "Failed to extract embedded runtime node_modules with tar. " +
         (error instanceof Error ? error.message : String(error)),
     );
   } finally {
