@@ -2,10 +2,17 @@
 set -euxo pipefail
 
 CODEX_APP_DIR="${CODEX_APP_DIR:-/Applications/ChatGPT.app}"
-APP_ASAR="$CODEX_APP_DIR/Contents/Resources/app.asar"
+APP_RESOURCES_DIR="$CODEX_APP_DIR/Contents/Resources"
+APP_ASAR="$APP_RESOURCES_DIR/app.asar"
+APP_UNPACKED_BETTER_SQLITE3="$APP_RESOURCES_DIR/app.asar.unpacked/node_modules/better-sqlite3"
 if [[ ! -f "$APP_ASAR" ]]; then
   echo "Codex Desktop app.asar not found: $APP_ASAR" >&2
   echo "Set CODEX_APP_DIR to the installed .app path." >&2
+  exit 1
+fi
+if [[ ! -d "$APP_UNPACKED_BETTER_SQLITE3" ]]; then
+  echo "Codex Desktop better-sqlite3 bundle not found: $APP_UNPACKED_BETTER_SQLITE3" >&2
+  echo "Expected the installed app's app.asar.unpacked payload." >&2
   exit 1
 fi
 
@@ -15,6 +22,8 @@ if [[ ! -f "node_modules/@electron/asar/bin/asar.mjs" ]]; then
   exit 1
 fi
 node "node_modules/@electron/asar/bin/asar.mjs" extract "$APP_ASAR" "scratch/asar"
+mkdir -p scratch/asar/node_modules/better-sqlite3
+cp -R "$APP_UNPACKED_BETTER_SQLITE3"/. scratch/asar/node_modules/better-sqlite3/
 cp assets/* scratch/asar/webview/
 PWA_SOURCE_ICON="scratch/asar/webview/assets/app-D0g8sCle.png"
 PWA_TARGET_ICON="scratch/asar/webview/assets/pwa-icon-512.png"
@@ -269,4 +278,3 @@ worker.write_text(updated)
 print(f"patched worker log level in {worker}")
 PY
 
-rm -rf scratch/asar/node_modules/better-sqlite3

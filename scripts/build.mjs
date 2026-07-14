@@ -21,74 +21,53 @@ if (!serverSource) {
 }
 
 const distDir = path.resolve("dist");
+const stagedAsarRoot = path.resolve("scratch/asar");
+
+function resolveElectronMainEntry(asarRoot) {
+  const buildDirectory = path.join(asarRoot, ".vite/build");
+  const matches = fs.readdirSync(buildDirectory).filter((name) =>
+    /^main-.+\.js$/.test(name),
+  );
+
+  if (matches.length === 0) {
+    throw new Error(`no main bundle found in ${buildDirectory}`);
+  }
+
+  if (matches.length > 1) {
+    throw new Error(`multiple main bundles found in ${buildDirectory}`);
+  }
+
+  return path.join(buildDirectory, matches[0]);
+}
+
+function assertStagedNativeModules(asarRoot) {
+  const mainEntryPath = resolveElectronMainEntry(asarRoot);
+  try {
+    createRequire(mainEntryPath).resolve("better-sqlite3");
+  } catch (error) {
+    throw new Error(
+      [
+        `staged app cannot resolve better-sqlite3 from ${mainEntryPath}.`,
+        "Run npm run setup, or point CODEX_ASAR_DIR at a prepared scratch/asar directory.",
+        error instanceof Error ? error.message : String(error),
+      ].join(" "),
+    );
+  }
+}
+
+assertStagedNativeModules(stagedAsarRoot);
 
 fs.rmSync(distDir, { recursive: true, force: true });
 fs.mkdirSync(distDir, { recursive: true });
 
-const buildRequire = createRequire(import.meta.url);
-
-function collectPackageTree(packageName, seen = new Set()) {
-  const packageJsonPath = buildRequire.resolve(`${packageName}/package.json`);
-  if (seen.has(packageJsonPath)) {
-    return [];
-  }
-  seen.add(packageJsonPath);
-
-  const packageRoot = path.dirname(packageJsonPath);
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  const dependencies = Object.keys(packageJson.dependencies ?? {});
-
-  return [
-    packageRoot,
-    ...dependencies.flatMap((dependencyName) =>
-      collectPackageTree(dependencyName, seen),
-    ),
-  ];
-}
-
-const runtimePackageRoots = collectPackageTree("better-sqlite3");
-const runtimePackageArchiveEntries = runtimePackageRoots.map((packageRoot) =>
-  path.relative(path.resolve("node_modules"), packageRoot),
-);
-const runtimePackageArchivePath = path.join(distDir, "runtime-node-modules.tgz");
-execFileSync("tar", [
-  "-chzf",
-  runtimePackageArchivePath,
-  "-C",
-  "node_modules",
-  ...runtimePackageArchiveEntries,
-]);
-const runtimePackageArchiveBuffer = fs.readFileSync(runtimePackageArchivePath);
-fs.rmSync(runtimePackageArchivePath, { force: true });
-const runtimePackageArchiveHash = createHash("sha256")
-  .update(runtimePackageArchiveBuffer)
-  .digest("hex")
-  .slice(0, 16);
-
 const asarArchivePath = path.join(distDir, "asar.tgz");
 execFileSync("tar", ["-czf", asarArchivePath, "-C", "scratch", "asar"]);
-const asarArchiveBuffer = fs.readFileSync(asarArchivePath);
-fs.rmSync(asarArchivePath, { force: true });
 const asarArchiveHash = createHash("sha256")
-  .update(asarArchiveBuffer)
+  .update(fs.readFileSync(asarArchivePath))
   .digest("hex")
   .slice(0, 16);
 
 fs.writeFileSync(path.join(distDir, "server.cjs"), serverSource);
-fs.writeFileSync(
-  path.join(distDir, "vendor.cjs"),
-  `module.exports = ${JSON.stringify({
-    hash: runtimePackageArchiveHash,
-    archiveBase64: runtimePackageArchiveBuffer.toString("base64"),
-  })};\n`,
-);
-fs.writeFileSync(
-  path.join(distDir, "asar.cjs"),
-  `module.exports = ${JSON.stringify({
-    hash: asarArchiveHash,
-    archiveBase64: asarArchiveBuffer.toString("base64"),
-  })};\n`,
-);
 
 const requireShim = `var require = typeof globalThis.require === "function"
   ? globalThis.require
@@ -106,51 +85,19 @@ const { execFileSync } = require("node:child_process");
 
 const distRoot = path.dirname(fs.realpathSync(process.argv[1]));
 const serverPath = path.join(distRoot, "server.cjs");
-const asar = require(path.join(distRoot, "asar.cjs"));
-const vendor = require(path.join(distRoot, "vendor.cjs"));
-const asarCacheRoot = path.join(os.tmpdir(), "codex-web-asar-" + asar.hash);
+const bundledAsarArchivePath = path.join(distRoot, "asar.tgz");
+const asarCacheRoot = path.join(os.tmpdir(), "codex-web-asar-${asarArchiveHash}");
 const extractedAsarRoot = path.join(asarCacheRoot, "asar");
-const vendorCacheRoot = path.join(os.tmpdir(), "codex-web-vendor-" + vendor.hash);
-const bundledNodeModulesRoot = path.join(vendorCacheRoot, "node_modules");
-const bundledBetterSqlitePackageJson = path.join(
-  bundledNodeModulesRoot,
-  "better-sqlite3",
-  "package.json",
-);
 
 if (!fs.existsSync(path.join(extractedAsarRoot, "package.json"))) {
-  const archivePath = path.join(asarCacheRoot, "asar.tgz");
   fs.rmSync(asarCacheRoot, { recursive: true, force: true });
   fs.mkdirSync(asarCacheRoot, { recursive: true });
-  fs.writeFileSync(archivePath, Buffer.from(asar.archiveBase64, "base64"));
-  try {
-    execFileSync("tar", ["-xzf", archivePath, "-C", asarCacheRoot], {
-      stdio: "inherit",
-    });
-  } finally {
-    fs.rmSync(archivePath, { force: true });
-  }
-}
-
-if (!fs.existsSync(bundledBetterSqlitePackageJson)) {
-  const archivePath = path.join(vendorCacheRoot, "runtime-node-modules.tgz");
-  fs.rmSync(vendorCacheRoot, { recursive: true, force: true });
-  fs.mkdirSync(bundledNodeModulesRoot, { recursive: true });
-  fs.writeFileSync(archivePath, Buffer.from(vendor.archiveBase64, "base64"));
-  try {
-    execFileSync("tar", ["-xzf", archivePath, "-C", bundledNodeModulesRoot], {
-      stdio: "inherit",
-    });
-  } finally {
-    fs.rmSync(archivePath, { force: true });
-  }
+  execFileSync("tar", ["-xzf", bundledAsarArchivePath, "-C", asarCacheRoot], {
+    stdio: "inherit",
+  });
 }
 
 process.env.CODEX_ASAR_DIR = process.env.CODEX_ASAR_DIR || extractedAsarRoot;
-process.env.NODE_PATH = process.env.NODE_PATH
-  ? bundledNodeModulesRoot + path.delimiter + process.env.NODE_PATH
-  : bundledNodeModulesRoot;
-require("node:module").Module._initPaths();
 require(serverPath);
 `;
 
