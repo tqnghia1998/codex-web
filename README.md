@@ -11,7 +11,7 @@ A browser frontend for Codex Desktop, running locally on macOS.
 ## Setup
 
 `npm run setup` extracts the installed Codex Desktop app, applies the browser
-patches, strips telemetry/analytics hooks, and builds the frontend. It reads
+patches, and builds the frontend. It reads
 `/Applications/ChatGPT.app/Contents/Resources/app.asar` by default.
 
 ```bash
