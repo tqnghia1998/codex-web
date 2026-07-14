@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euxo pipefail
+set -euo pipefail
 
 CODEX_APP_DIR="${CODEX_APP_DIR:-/Applications/ChatGPT.app}"
 APP_RESOURCES_DIR="$CODEX_APP_DIR/Contents/Resources"
@@ -28,51 +28,8 @@ PWA_PADDING_AFTER=$((PWA_PADDING_TOTAL - PWA_PADDING_BEFORE))
 sharp -i "$PWA_SOURCE_ICON" -o "$PWA_TARGET_ICON" -f png resize "$PWA_CONTENT_SIZE" "$PWA_CONTENT_SIZE" --fit inside -- flatten white -- extend "$PWA_PADDING_BEFORE" "$PWA_PADDING_AFTER" "$PWA_PADDING_BEFORE" "$PWA_PADDING_AFTER" --background white -- removeAlpha
 if [[ -n "${DEV:-}" ]]; then
   prettier --ignore-path /dev/null --ignore-unknown --write "scratch/asar"
-else
-  patched_files=()
-  missing_patched_files=()
-  while IFS= read -r patched_file; do
-    if [[ -f "$patched_file" ]]; then
-      patched_files+=("$patched_file")
-    else
-      missing_patched_files+=("$patched_file")
-    fi
-  done < <(
-    awk '/^\+\+\+ b\//{sub(/^\+\+\+ b\//, "scratch/asar/"); print}' patches/*.patch | sort -u
-  )
-
-  if (( ${#missing_patched_files[@]} > 0 )); then
-    echo "Warning: some patch targets are missing; incompatible patches may fail below:" >&2
-    printf '  %s\n' "${missing_patched_files[@]}" >&2
-  fi
-
-  prettier --ignore-path /dev/null --ignore-unknown --write "${patched_files[@]}"
 fi
 
-PATCH_STRICT="${PATCH_STRICT:-0}"
-apply_patch() {
-  local patch_file="$1"
-  if ! patch --batch --forward --no-backup-if-mismatch --strip 1 --directory scratch/asar < "$patch_file"; then
-    if [[ "$PATCH_STRICT" == 1 ]]; then
-      return 1
-    fi
-    echo "Warning: skipped failed patch: $patch_file" >&2
-    find scratch/asar -name '*.rej' -delete
-  fi
-}
-apply_patch patches/webview-remove-csp.patch
-apply_patch patches/webview-style.patch
-apply_patch patches/webview-favicon.patch
-apply_patch patches/webview-pwa.patch
-apply_patch patches/webview-thread-title.patch
-apply_patch patches/webview-initial-route.patch
-apply_patch patches/webview-electron-shim-close-sidebar.patch
-apply_patch patches/webview-prosemirror-inputmode.patch
-apply_patch patches/webview-use-atfs-for-local-files.patch
-apply_patch patches/webview-prompt-search-param.patch
-apply_patch patches/webview-app-host-services.patch
-apply_patch patches/sentry-disable-shell.patch
-apply_patch patches/sentry-disable-webview.patch
 
 python3 - <<'PY'
 import re
@@ -86,20 +43,41 @@ source, _ = re.subn(
     source,
     flags=re.IGNORECASE,
 )
-if '<base href="/"' not in source:
-    source = source.replace(
-        "<!-- PROD_BASE_TAG_HERE -->",
-        "<!-- PROD_BASE_TAG_HERE -->\n    <base href=\"/\" />",
-        1,
-    )
-if 'src="./assets/preload.js?v=8"' not in source:
-    source = source.replace(
-        "<!-- PROD_CSP_TAG_HERE -->",
-        "<!-- PROD_CSP_TAG_HERE -->\n    <script type=\"module\" src=\"./assets/preload.js?v=8\"></script>",
-        1,
-    )
-if '<base href="/"' not in source or 'src="./assets/preload.js?v=8"' not in source:
-    raise SystemExit("Failed to patch webview/index.html for preload")
+
+def inject_once(marker: str, snippet: str) -> None:
+    global source
+    if snippet in source:
+        return
+    if marker not in source:
+        raise SystemExit(f"Missing marker in webview/index.html: {marker}")
+    source = source.replace(marker, f"{marker}\n{snippet}", 1)
+
+inject_once(
+    "<title>Codex</title>",
+    """    <link rel=\"icon\" type=\"image/svg+xml\" href=\"./favicon.svg\" />
+    <link rel=\"manifest\" href=\"/manifest.json\" />
+    <style>
+      .main-surface {
+        --spacing-token-safe-header-left: 0px;
+      }
+    </style>""",
+)
+inject_once("<!-- PROD_BASE_TAG_HERE -->", '    <base href="/" />')
+inject_once(
+    "<!-- PROD_CSP_TAG_HERE -->",
+    '    <script type="module" src="./assets/preload.js?v=8"></script>',
+)
+
+required = [
+    '<link rel="icon" type="image/svg+xml" href="./favicon.svg" />',
+    '<link rel="manifest" href="/manifest.json" />',
+    '--spacing-token-safe-header-left: 0px;',
+    '<base href="/" />',
+    'src="./assets/preload.js?v=8"',
+]
+if any(item not in source for item in required):
+    raise SystemExit("Failed to patch webview/index.html")
+
 index.write_text(source)
 PY
 
@@ -116,7 +94,6 @@ for path in Path("scratch/asar/webview/assets").glob("index-*.js"):
     )
     if updated != source:
         path.write_text(updated)
-        print(f"patched bootstrap preload in {path}")
         patched = True
 
 if not patched:
@@ -144,11 +121,31 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
             count=1,
         )
         path.write_text(source)
-        print(f"patched initial route in {path} (navigation: {navigation_count})")
         initial_route_patched = True
 
 if not initial_route_patched:
     raise SystemExit("Failed to patch initial route shim")
+
+sidebar_patched = False
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    updated = source.replace(
+        "Xy=oi(br,!0)",
+        "Xy=oi(br,window.__ELECTRON_SHIM__?.initialSidebarState??!0)",
+        1,
+    )
+    updated = updated.replace(
+        "eb=oi(br,()=>new qr(1))",
+        "eb=oi(br,()=>new qr(window.__ELECTRON_SHIM__?.initialSidebarState?1:0))",
+        1,
+    )
+    if updated != source:
+        path.write_text(updated)
+        sidebar_patched = True
+        break
+
+if not sidebar_patched:
+    raise SystemExit("Failed to patch sidebar initial state")
 
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
@@ -160,45 +157,68 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     )
     if count:
         path.write_text(source)
-        print(f"patched project root in {path}")
 
 PY
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
 patched = False
+pattern = re.compile(
+    r"async function ([A-Za-z0-9_$]+)\(\)\{([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\),([A-Za-z0-9_$]+)=await \2\.services,\4\.devboxService\}",
+)
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    original = source
-    source = source.replace(
-        "function DZe(){dC=EZe(),fC=await dC.services,fC.devboxService}",
-        "function DZe(){if(window.__ELECTRON_SHIM__?.services!=null){dC={services:Promise.resolve(window.__ELECTRON_SHIM__.services)},fC=window.__ELECTRON_SHIM__.services,fC.devboxService;return}dC=EZe(),fC=await dC.services,fC.devboxService}",
-        1,
+    source, count = pattern.subn(
+        lambda match: (
+            f"async function {match.group(1)}(){{"
+            f"if(window.__ELECTRON_SHIM__?.services!=null){{"
+            f"{match.group(2)}={{services:Promise.resolve(window.__ELECTRON_SHIM__.services)}},"
+            f"{match.group(4)}=window.__ELECTRON_SHIM__.services,"
+            f"{match.group(4)}.devboxService;return}}"
+            f"{match.group(2)}={match.group(3)}(),"
+            f"{match.group(4)}=await {match.group(2)}.services,"
+            f"{match.group(4)}.devboxService}}"
+        ),
+        source,
+        count=1,
     )
-    if source != original:
+    if count:
         path.write_text(source)
-        print(f"patched app-host services in {path}")
         patched = True
+        break
 
 if not patched:
     raise SystemExit("Failed to patch app-host services")
 PY
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
 patched = False
-needle = "function iDn(e,t){let n=rDn(e,t),r=new Map(n.map((e,t)=>[e,t]));return[...e].sort((e,t)=>(r.get(e.projectId)??2**53-1)-(r.get(t.projectId)??2**53-1))}"
-replacement = "function iDn(e,t){let n=window.__ELECTRON_SHIM__?.folderFilterProjectId,r=n==null?e:e.filter(e=>e.projectId===n||e.path===n),i=rDn(r,t),a=new Map(i.map((e,t)=>[e,t]));return[...r].sort((e,t)=>(a.get(e.projectId)??2**53-1)-(a.get(t.projectId)??2**53-1))}"
+pattern = re.compile(
+    r"function ([A-Za-z0-9_$]+)\(e,t\)\{let ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(e,t\),([A-Za-z0-9_$]+)=new Map\(\2\.map\(\(e,t\)=>\[e,t\]\)\);return\[\.\.\.e\]\.sort\(\(e,t\)=>\(\4\.get\(e\.projectId\)\?\?2\*\*53-1\)-\(\4\.get\(t\.projectId\)\?\?2\*\*53-1\)\)\}"
+)
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    if needle not in source:
-        continue
-    path.write_text(source.replace(needle, replacement, 1))
-    print(f"patched folder-filtered project groups in {path}")
-    patched = True
-    break
+    source, count = pattern.subn(
+        lambda match: (
+            f"function {match.group(1)}(e,t){{"
+            f"let {match.group(2)}=window.__ELECTRON_SHIM__?.folderFilterProjectId,"
+            f"r={match.group(2)}==null?e:e.filter(e=>e.projectId==={match.group(2)}||e.path==={match.group(2)}),"
+            f"i={match.group(3)}(r,t),"
+            f"a=new Map(i.map((e,t)=>[e,t]));"
+            f"return[...r].sort((e,t)=>(a.get(e.projectId)??2**53-1)-(a.get(t.projectId)??2**53-1))}}"
+        ),
+        source,
+        count=1,
+    )
+    if count:
+        path.write_text(source)
+        patched = True
+        break
 
 if not patched:
     raise SystemExit("Failed to patch folder-filtered project groups")
@@ -216,8 +236,6 @@ source, count = re.subn(
 )
 if count:
     path.write_text(source)
-else:
-    print(f"Warning: could not disable Sentry in {path}", file=sys.stderr)
 PY
 done < <(grep -rlF "Sentry SDK should be initialized before the Electron app" scratch/asar/.vite/build --include='*.js' || true)
 
@@ -241,32 +259,76 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
 PY
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
-main_patched = False
-for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+patched = False
+pattern = re.compile(r"logger=([A-Za-z0-9_$]+)\.i\(`AppServerConnection`\)")
+for path in Path("scratch/asar/.vite/build").glob("src-*.js"):
     source = path.read_text(errors="ignore")
-    updated = source.replace(",p=n.h(o),", ',p="error",', 1)
-    updated = updated.replace("maxLogLevel:o", 'maxLogLevel:"error"', 1)
-    if updated != source:
-        path.write_text(updated)
-        print(f"patched main log level in {path}")
-        main_patched = True
+    source, count = pattern.subn(
+        lambda match: (
+            "logger=((e)=>({trace(){},debug(){},info(){},warning(){},error:e.error.bind(e)}))"
+            f"({match.group(1)}.i(`AppServerConnection`))"
+        ),
+        source,
+        count=1,
+    )
+    if count:
+        path.write_text(source)
+        patched = True
         break
 
-if not main_patched:
-    raise SystemExit("Failed to patch main log level")
-
-worker = Path("scratch/asar/.vite/build/worker.js")
-source = worker.read_text(errors="ignore")
-updated = source.replace(
-    "nce(J9, Y9, q9.codexAppSessionId, tde);",
-    'nce(J9, Y9, q9.codexAppSessionId, "error");',
-    1,
-)
-if updated == source:
-    raise SystemExit("Failed to patch worker log level")
-worker.write_text(updated)
-print(f"patched worker log level in {worker}")
+if not patched:
+    raise SystemExit("Failed to patch AppServerConnection logger")
 PY
+
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+patched = False
+pattern = re.compile(r"var ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\.a\(`electron-message-handler`\)")
+for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+    source = path.read_text(errors="ignore")
+    source, count = pattern.subn(
+        lambda match: (
+            f"var {match.group(1)}=()=>({{trace(){{}},debug(){{}},info(){{}},warning(){{}},error(){{}}}})"
+        ),
+        source,
+        count=1,
+    )
+    if count:
+        path.write_text(source)
+        patched = True
+        break
+
+if not patched:
+    raise SystemExit("Failed to patch electron-message-handler logger")
+PY
+
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+patched = False
+pattern = re.compile(r"var ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\.a\(`electron-fetch-wrapper`\)")
+for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+    source = path.read_text(errors="ignore")
+    source, count = pattern.subn(
+        lambda match: (
+            f"var {match.group(1)}=()=>({{trace(){{}},debug(){{}},info(){{}},warning(){{}},error(){{}}}})"
+        ),
+        source,
+        count=1,
+    )
+    if count:
+        path.write_text(source)
+        patched = True
+        break
+
+if not patched:
+    raise SystemExit("Failed to patch electron-fetch-wrapper logger")
+PY
+
 

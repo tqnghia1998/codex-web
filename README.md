@@ -98,15 +98,12 @@ mv scratch scratch-backup
 ```
 
 Run `npm run setup` again after the update. It extracts the new `app.asar`,
-applies every patch in `patches/`, and rebuilds the browser assets.
+applies the built-in rewrite steps from `scripts/prepare_asar`, and rebuilds the
+browser assets.
 
-If an upstream update changes bundle names or code, inspect failed patches and
-update the corresponding patch files. Use strict mode to make any failed patch
-stop the build:
-
-```bash
-PATCH_STRICT=1 npm run setup
-```
+If an upstream update changes bundle names or minified code shapes, update the
+matching rewrite in `scripts/prepare_asar`. `DEV=1 npm run setup` still pretties
+`scratch/asar` for manual inspection.
 
 Validate the result by starting the server and opening the browser UI.
 

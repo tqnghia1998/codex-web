@@ -187,7 +187,6 @@ async function main() {
       );
     }
 
-    console.log(`smoke ok: ${baseUrl}`);
   } finally {
     child.kill("SIGTERM");
     if (child.exitCode === null && child.signalCode === null) {

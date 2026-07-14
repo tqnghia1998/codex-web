@@ -116,6 +116,7 @@ type StatsigGateEvaluation = {
 type ElectronShimState = {
   initialRoute?: string;
   initialSidebarState?: boolean;
+  folderFilterProjectId?: string;
   closeSidebar?: () => void;
   onMemoryNavigationChanged?: (navigation: MemoryNavigationChange) => void;
   overrideAdapter?: {
@@ -321,6 +322,21 @@ function shouldCloseSidebarForMemoryPath(path: string): boolean {
   );
 }
 
+function updateBrowserPath(nextPath: string, action: "POP" | "PUSH" | "REPLACE"): void {
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+  if (currentPath === nextPath) {
+    window.history.replaceState(undefined, "", nextPath);
+    return;
+  }
+
+  if (action === "REPLACE") {
+    window.history.replaceState(undefined, "", nextPath);
+    return;
+  }
+
+  window.history.pushState(undefined, "", nextPath);
+}
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -456,7 +472,7 @@ function requestWorkspaceDirectoryEntries(
 
 const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
-const initialSidebarState = !mobileMediaQuery.matches;
+const initialSidebarState = false;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
 const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
 
@@ -507,6 +523,10 @@ electronShim.initialSidebarState = initialSidebarState;
 electronShim.onMemoryNavigationChanged = (navigation) => {
   const path = navigation.location.pathname;
   if (path === "/" && folderToAdd && navigation.action !== "POP") {
+    updateBrowserPath(
+      `/?${new URLSearchParams({ folder: folderToAdd }).toString()}`,
+      navigation.action,
+    );
     dispatchNavigateToRoute(
       `/projects?${new URLSearchParams({ projectId: folderToAdd })}`,
     );
@@ -530,12 +550,7 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
     document.title = browserPath.titleChange;
   }
 
-  if (window.location.pathname === browserPath.path) {
-    window.history.replaceState(undefined, "", browserPath.path);
-    return;
-  }
-
-  window.history.pushState(undefined, "", browserPath.path);
+  updateBrowserPath(browserPath.path, navigation.action);
 };
 
 export const ipcRenderer = {

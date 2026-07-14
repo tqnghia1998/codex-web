@@ -91,7 +91,13 @@ const bundledAsarArchivePath = path.join(distRoot, "asar.tgz");
 const bundledRuntimeNodeModulesArchivePath = path.join(distRoot, "runtime-node-modules.tgz");
 const asarCacheRoot = path.join(os.tmpdir(), "codex-web-asar-${asarArchiveHash}");
 const extractedAsarRoot = path.join(asarCacheRoot, "asar");
-const vendorCacheRoot = path.join(os.tmpdir(), "codex-web-vendor-${runtimePackageArchiveHash}");
+const runtimeCacheKey = process.versions.electron
+  ? \`electron-\${process.versions.electron}-abi-\${process.versions.modules}\`
+  : \`node-\${process.versions.node}-abi-\${process.versions.modules}\`;
+const vendorCacheRoot = path.join(
+  os.tmpdir(),
+  \`codex-web-vendor-${runtimePackageArchiveHash}-\${runtimeCacheKey}\`,
+);
 const bundledNodeModulesRoot = path.join(vendorCacheRoot, "node_modules");
 const bundledBetterSqlitePackageDir = path.join(bundledNodeModulesRoot, "better-sqlite3");
 const bundledBetterSqlitePackageJson = path.join(bundledBetterSqlitePackageDir, "package.json");
@@ -123,6 +129,27 @@ function runNpm(args) {
   });
 }
 
+function buildBetterSqliteRebuildArgs() {
+  const args = [
+    "rebuild",
+    "better-sqlite3",
+    "--foreground-scripts",
+    "--prefix",
+    vendorCacheRoot,
+    "--loglevel=error",
+  ];
+
+  if (process.versions.electron) {
+    args.push(
+      "--runtime=electron",
+      \`--target=\${process.versions.electron}\`,
+      "--disturl=https://electronjs.org/headers",
+    );
+  }
+
+  return args;
+}
+
 function ensureBetterSqlite3Binary() {
   try {
     probeBetterSqlite3();
@@ -132,7 +159,7 @@ function ensureBetterSqlite3Binary() {
       path.join(vendorCacheRoot, "package.json"),
       JSON.stringify({ private: true }, null, 2) + "\\n",
     );
-    runNpm(["rebuild", "better-sqlite3", "--foreground-scripts", "--prefix", vendorCacheRoot]);
+    runNpm(buildBetterSqliteRebuildArgs());
     try {
       probeBetterSqlite3();
       return;
