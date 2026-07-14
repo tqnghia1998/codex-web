@@ -22,24 +22,27 @@ type ServerOptions = {
   port: number;
 };
 
-function cacheControlForWebviewFile(filePath: string): string {
-  const filename = path.basename(filePath);
-  const isAsset = path.basename(path.dirname(filePath)) === "assets";
-  const hasContentHash = [
-    /-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/,
-    /\.[a-z0-9]{10}\.[A-Za-z0-9]+$/,
-  ].some((pattern) => pattern.test(filename));
+const corsHeaders = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With",
+  "access-control-max-age": "86400",
+};
 
-  return isAsset &&
-    !new Set([
-      "dotnet.js",
-      "preload.js",
-      "preload.js.map",
-      "pwa-icon-512.png",
-    ]).has(filename) &&
-    hasContentHash
-    ? "public, max-age=31536000, immutable"
-    : "public, max-age=0";
+function applyCorsHeaders(target: {
+  header(name: string, value: string): unknown;
+}): void {
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    target.header(name, value);
+  }
+}
+
+function applyRawCorsHeaders(target: {
+  setHeader(name: string, value: string): unknown;
+}): void {
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    target.setHeader(name, value);
+  }
 }
 
 const asarRoot = path.resolve(
@@ -394,6 +397,18 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   const websocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
 
+  app.addHook("onRequest", async (request, reply) => {
+    applyCorsHeaders(reply);
+    if (request.method === "OPTIONS") {
+      return reply.code(204).send();
+    }
+  });
+
+  app.addHook("onSend", async (_request, reply, payload) => {
+    applyCorsHeaders(reply);
+    return payload;
+  });
+
   await app.register(fastifyMultipart, {
     limits: {
       fileSize: Infinity,
@@ -434,14 +449,16 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     root: "/",
     prefix: "/@fs/",
     decorateReply: false,
+    setHeaders: (response) => {
+      applyRawCorsHeaders(response);
+    },
   });
 
   await app.register(fastifyStatic, {
     root: path.join(asarRoot, "webview"),
     prefix: "/",
-    cacheControl: false,
-    setHeaders(response, filePath) {
-      response.setHeader("Cache-Control", cacheControlForWebviewFile(filePath));
+    setHeaders: (response) => {
+      applyRawCorsHeaders(response);
     },
   });
 
