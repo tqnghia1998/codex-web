@@ -22,6 +22,29 @@ type ServerOptions = {
   port: number;
 };
 
+const corsHeaders = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  "access-control-allow-headers": "Content-Type, Authorization, X-Requested-With",
+  "access-control-max-age": "86400",
+};
+
+function applyCorsHeaders(target: {
+  header(name: string, value: string): unknown;
+}): void {
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    target.header(name, value);
+  }
+}
+
+function applyRawCorsHeaders(target: {
+  setHeader(name: string, value: string): unknown;
+}): void {
+  for (const [name, value] of Object.entries(corsHeaders)) {
+    target.setHeader(name, value);
+  }
+}
+
 const asarRoot = path.resolve(
   process.env.CODEX_ASAR_DIR ?? path.resolve(process.cwd(), "scratch/asar"),
 );
@@ -372,6 +395,18 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   const websocketServer = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
 
+  app.addHook("onRequest", async (request, reply) => {
+    applyCorsHeaders(reply);
+    if (request.method === "OPTIONS") {
+      return reply.code(204).send();
+    }
+  });
+
+  app.addHook("onSend", async (_request, reply, payload) => {
+    applyCorsHeaders(reply);
+    return payload;
+  });
+
   await app.register(fastifyMultipart, {
     limits: {
       fileSize: Infinity,
@@ -412,11 +447,17 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     root: "/",
     prefix: "/@fs/",
     decorateReply: false,
+    setHeaders: (response) => {
+      applyRawCorsHeaders(response);
+    },
   });
 
   await app.register(fastifyStatic, {
     root: path.join(asarRoot, "webview"),
     prefix: "/",
+    setHeaders: (response) => {
+      applyRawCorsHeaders(response);
+    },
   });
 
   app.get("/", async (_request, reply) => {
