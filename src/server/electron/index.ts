@@ -54,11 +54,19 @@ function getIpcMainBridgeState(): IpcMainBridgeState {
   return globals.__codexElectronIpcBridge;
 }
 
+const verboseElectronShim =
+  process.env.CODEX_VERBOSE_ELECTRON_SHIM === "1" ||
+  process.env.CODEX_VERBOSE_ELECTRON_SHIM === "true";
+
 function log(method: string, args: unknown[]): void {
+  if (!verboseElectronShim) {
+    return;
+  }
   console.log(`[electron-main-stub] ${method}`, args);
 }
 
 function createDeepStub(pathLabel: string): StubFunction {
+  const propertyStubs = new Map<PropertyKey, unknown>();
   const fn: StubFunction = (...args: unknown[]) => {
     log(`${pathLabel}()`, args);
     return undefined;
@@ -82,7 +90,11 @@ function createDeepStub(pathLabel: string): StubFunction {
         return () => pathLabel;
       }
 
-      return createDeepStub(`${pathLabel}.${String(prop)}`);
+      if (!propertyStubs.has(prop)) {
+        propertyStubs.set(prop, createDeepStub(`${pathLabel}.${String(prop)}`));
+      }
+
+      return propertyStubs.get(prop);
     },
   });
 }
@@ -202,17 +214,6 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
   return event;
 }
 
-function normalizeInvokeArgs(channel: string, args: unknown[]): unknown[] {
-  if (
-    channel === "codex_desktop:get-fast-mode-rollout-metrics" &&
-    (args.length === 0 || args[0] == null)
-  ) {
-    return [{ params: {} }];
-  }
-
-  return args;
-}
-
 function createIpcMainStub(): {
   handle: (
     channel: string,
@@ -258,9 +259,13 @@ function createIpcMainStub(): {
       throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
     }
     const event = createIpcMainEvent();
-    return await Promise.resolve(
-      handler(event, ...normalizeInvokeArgs(channel, args)),
-    );
+    if (
+      channel === "codex_desktop:get-fast-mode-rollout-metrics" &&
+      (args.length === 0 || args[0] == null)
+    ) {
+      return await Promise.resolve(handler(event, { params: {} }));
+    }
+    return await Promise.resolve(handler(event, ...args));
   };
 
   bridgeState.handleRendererSend = (
