@@ -167,91 +167,10 @@ type WorkspaceDirectoryEntries = {
   entries: WorkspaceDirectoryEntry[];
 };
 
-type MessagePortListener = (...args: unknown[]) => void;
-
-type BridgedMessagePort = {
-  close: () => void;
-  on: (event: string, listener: MessagePortListener) => unknown;
-  postMessage: (message: unknown) => void;
-  start: () => void;
+type StagedUpload = {
+  uploadedPath: string;
 };
 
-class WebSocketMessagePort implements BridgedMessagePort {
-  private closed = false;
-  private readonly listeners = new Map<string, Set<MessagePortListener>>();
-
-  constructor(
-    private readonly portId: string,
-    private readonly sendToRenderer: (message: MainToRendererMessage) => void,
-    private readonly onClosed: () => void,
-  ) {}
-
-  on(event: string, listener: MessagePortListener): this {
-    const listeners = this.listeners.get(event) ?? new Set();
-    listeners.add(listener);
-    this.listeners.set(event, listeners);
-
-    return this;
-  }
-
-  postMessage(data: unknown): void {
-    if (this.closed) {
-      return;
-    }
-    this.sendToRenderer({
-      type: "message-port-message",
-      portId: this.portId,
-      data,
-    });
-  }
-
-  start(): void {}
-
-  close(): void {
-    if (!this.markClosed()) {
-      return;
-    }
-    this.sendToRenderer({
-      type: "message-port-close",
-      portId: this.portId,
-    });
-  }
-
-  receiveMessage(data: unknown): void {
-    if (this.closed) {
-      return;
-    }
-    const listeners = this.listeners.get("message");
-    if (!listeners || listeners.size === 0) {
-      return;
-    }
-    for (const listener of listeners) {
-      listener({ data });
-    }
-  }
-
-  disconnect(): void {
-    if (!this.markClosed()) {
-      return;
-    }
-    this.emit("close");
-  }
-
-  private emit(event: string, ...args: unknown[]): void {
-    for (const listener of this.listeners.get(event) ?? []) {
-      listener(...args);
-    }
-  }
-
-  private markClosed(): boolean {
-    if (this.closed) {
-      return false;
-    }
-    this.closed = true;
-    this.onClosed();
-    return true;
-  }
-}
 
 function workspaceDirectoryEntryTypeRank(
   entry: WorkspaceDirectoryEntry,
@@ -355,6 +274,20 @@ function errorMessage(error: unknown): string {
     return error.stack ?? error.message;
   }
   return String(error);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function createUploadedPath(uploadRoot: string, label: string): string {
+  return path.join(uploadRoot, `${randomUUID()}${path.extname(label)}`);
+}
+
+async function removeFileIfExists(filePath: string): Promise<void> {
+  try {
+    await fs.rm(filePath, { force: true });
+  } catch {}
 }
 
 async function getWorkspaceDirectoryEntries({
@@ -461,6 +394,11 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   const uploadRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "codex-web-uploads-"),
   );
+  const stagedUploads = new Map<string, StagedUpload>();
+
+  app.addHook("onClose", async () => {
+    await fs.rm(uploadRoot, { recursive: true, force: true });
+  });
 
   app.post("/__backend/upload", async (request, reply) => {
     if (!request.isMultipart()) {
@@ -471,8 +409,7 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
       (async function* () {
         for await (const part of request.files()) {
           const label = part.filename?.trim() || "upload";
-
-          const uploadedPath = path.join(uploadRoot, randomUUID());
+          const uploadedPath = createUploadedPath(uploadRoot, label);
 
           await pipeline(part.file, fsSync.createWriteStream(uploadedPath));
 
@@ -486,6 +423,78 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
     );
 
     return reply.send({ files });
+  });
+
+  app.post("/__backend/staged-upload/create", async (request, reply) => {
+    const body = request.body;
+    const label =
+      isRecord(body) && typeof body.fileName === "string" && body.fileName.trim()
+        ? body.fileName.trim()
+        : "upload";
+    const assetId = randomUUID();
+    const uploadedPath = createUploadedPath(uploadRoot, label);
+
+    await fs.writeFile(uploadedPath, "");
+    stagedUploads.set(assetId, { uploadedPath });
+
+    return reply.send({ ok: true, assetId, path: "" });
+  });
+
+  app.post("/__backend/staged-upload/append", async (request, reply) => {
+    const body = request.body;
+    if (
+      !isRecord(body) ||
+      typeof body.assetId !== "string" ||
+      typeof body.dataBase64 !== "string"
+    ) {
+      return reply.code(400).send({ error: "invalid staged upload append body" });
+    }
+
+    const stagedUpload = stagedUploads.get(body.assetId);
+    if (!stagedUpload) {
+      return reply.code(404).send({ error: "staged upload not found" });
+    }
+
+    await fs.appendFile(
+      stagedUpload.uploadedPath,
+      Buffer.from(body.dataBase64, "base64"),
+    );
+
+    return reply.send({ ok: true });
+  });
+
+  app.post("/__backend/staged-upload/finish", async (request, reply) => {
+    const body = request.body;
+    if (!isRecord(body) || typeof body.assetId !== "string") {
+      return reply.code(400).send({ error: "invalid staged upload finish body" });
+    }
+
+    const stagedUpload = stagedUploads.get(body.assetId);
+    if (!stagedUpload) {
+      return reply.code(404).send({ error: "staged upload not found" });
+    }
+
+    return reply.send({
+      ok: true,
+      assetId: body.assetId,
+      path: stagedUpload.uploadedPath,
+    });
+  });
+
+  app.post("/__backend/staged-upload/remove", async (request, reply) => {
+    const body = request.body;
+    if (!isRecord(body) || typeof body.assetId !== "string") {
+      return reply.code(400).send({ error: "invalid staged upload remove body" });
+    }
+
+    const stagedUpload = stagedUploads.get(body.assetId);
+    if (!stagedUpload) {
+      return reply.send({ ok: true });
+    }
+
+    stagedUploads.delete(body.assetId);
+    await removeFileIfExists(stagedUpload.uploadedPath);
+    return reply.send({ ok: true });
   });
 
   await app.register(fastifyStatic, {

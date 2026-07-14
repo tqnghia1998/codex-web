@@ -178,6 +178,53 @@ async function main() {
       fail("POST /__backend/upload returned unexpected payload");
     }
 
+    const stagedCreate = await fetch(`${baseUrl}/__backend/staged-upload/create`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fileName: "smoke.txt" }),
+    });
+    if (!stagedCreate.ok) {
+      fail(`POST /__backend/staged-upload/create returned ${stagedCreate.status}`);
+    }
+    const stagedCreateJson = await stagedCreate.json();
+    if (typeof stagedCreateJson.assetId !== "string" || stagedCreateJson.assetId.length === 0) {
+      fail("POST /__backend/staged-upload/create returned unexpected payload");
+    }
+
+    const stagedAppend = await fetch(`${baseUrl}/__backend/staged-upload/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assetId: stagedCreateJson.assetId,
+        dataBase64: Buffer.from("codex staged upload\n").toString("base64"),
+      }),
+    });
+    if (!stagedAppend.ok) {
+      fail(`POST /__backend/staged-upload/append returned ${stagedAppend.status}`);
+    }
+
+    const stagedFinish = await fetch(`${baseUrl}/__backend/staged-upload/finish`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assetId: stagedCreateJson.assetId }),
+    });
+    if (!stagedFinish.ok) {
+      fail(`POST /__backend/staged-upload/finish returned ${stagedFinish.status}`);
+    }
+    const stagedFinishJson = await stagedFinish.json();
+    if (typeof stagedFinishJson.path !== "string" || !stagedFinishJson.path.endsWith(".txt")) {
+      fail("POST /__backend/staged-upload/finish returned unexpected payload");
+    }
+
+    const stagedRemove = await fetch(`${baseUrl}/__backend/staged-upload/remove`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assetId: stagedCreateJson.assetId }),
+    });
+    if (!stagedRemove.ok) {
+      fail(`POST /__backend/staged-upload/remove returned ${stagedRemove.status}`);
+    }
+
     await openWebSocket(`ws://127.0.0.1:${port}/__backend/ipc`);
 
     await new Promise((resolve) => setTimeout(resolve, 500));

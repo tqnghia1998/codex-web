@@ -4,13 +4,25 @@ import {
   mapMemoryPathToBrowserPath,
 } from "./routes";
 import {
+  handleBrowserRuntimeMessage,
   handleLocalFilePickerMessage,
   isLocalFilePickerMessage,
+  uploadFiles,
 } from "./files";
 import {
   openSelectWorkspaceRootDialog,
   type WorkspaceDirectoryEntries,
 } from "./workspace-root-dialog";
+
+declare global {
+  interface Window {
+    chrome?: {
+      runtime?: {
+        sendMessage?: (message: unknown) => Promise<unknown>;
+      };
+    };
+  }
+}
 
 type IpcListener = (event: unknown, ...args: unknown[]) => void;
 
@@ -113,11 +125,38 @@ type StatsigGateEvaluation = {
   [key: string]: unknown;
 };
 
+type ElectronFileAttachments = {
+  persistImageFileToTemp?: (file: File) => Promise<string | null>;
+};
+
 type ElectronShimState = {
   initialRoute?: string;
   initialSidebarState?: boolean;
   folderFilterProjectId?: string;
   closeSidebar?: () => void;
+  services?: {
+    appInfo?: {
+      get: () => Promise<ElectronAppInfo>;
+    };
+    workspaceFiles?: ElectronWorkspaceFiles;
+    fileAttachments?: ElectronFileAttachments;
+    requestUserInputAutoResolution?: {
+      recordConversationActivity?: (args: {
+        conversationId: string;
+        hostId: string;
+      }) => void;
+      setConversationPresented?: (args: {
+        conversationId: string;
+        hostId: string;
+        presented: boolean;
+      }) => void;
+      snooze?: (args: {
+        conversationId: string;
+        hostId: string;
+        requestId: string;
+      }) => void;
+    };
+  };
   onMemoryNavigationChanged?: (navigation: MemoryNavigationChange) => void;
   overrideAdapter?: {
     getGateOverride?: (
@@ -486,24 +525,36 @@ Object.assign(globalThis, {
   },
 });
 
-electronShim.overrideAdapter = {
-  getGateOverride(evaluation) {
-    if (evaluation.name === "2911712394") {
-      return {
-        ...evaluation,
-        value: true,
-      };
-    }
+window.chrome ??= {};
+window.chrome.runtime ??= {};
+window.chrome.runtime.sendMessage ??= handleBrowserRuntimeMessage;
 
-    if (evaluation.name === "1042620455") {
-      // Remote control (Slingshot).
-      return {
-        ...evaluation,
-        value: true,
-      };
-    }
-
-    return null;
+electronShim.services = {
+  ...electronShim.services,
+  appInfo: {
+    get: async () => ({
+      appBrand: "codex",
+      appIconMedium: null,
+      appName: "Codex",
+      buildFlavor,
+      buildNumber: null,
+      dockIconPreviews: null,
+      osName: "macOS",
+      systemVersion: null,
+      version: __CODEX_APP_VERSION__,
+    }),
+  },
+  workspaceFiles: electronShim.services?.workspaceFiles ?? {},
+  fileAttachments: {
+    ...electronShim.services?.fileAttachments,
+    persistImageFileToTemp: async (file: File) =>
+      (await uploadFiles([file]))[0]?.fsPath ?? null,
+  },
+  requestUserInputAutoResolution: {
+    ...electronShim.services?.requestUserInputAutoResolution,
+    recordConversationActivity: () => undefined,
+    setConversationPresented: () => undefined,
+    snooze: () => undefined,
   },
 };
 
@@ -735,6 +786,6 @@ export const contextBridge = {
 
 export const webUtils = {
   getPathForFile(_file: File): string | null {
-    return unimplemented("webUtils.getPathForFile");
+    return null;
   },
 };
