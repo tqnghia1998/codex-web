@@ -206,5 +206,28 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     path.write_text(source)
 PY
 
+python3 - <<'PY'
+from pathlib import Path
+
+index_html = Path("scratch/asar/webview/index.html").read_text(errors="ignore")
+asset_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("*.js")]
+index_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("index-*.js")]
+
+checks = {
+    "base href injection": '<base href="/" />' in index_html,
+    "preload script tag": 'src="./assets/preload.js?v=8"' in index_html,
+    "bootstrap preload import": any('await import("./preload.js?v=8")' in source for source in index_sources),
+    "initial route shim": any('window.__ELECTRON_SHIM__?.initialRoute??`/`' in source for source in asset_sources),
+    "app-host shim": any('window.__ELECTRON_SHIM__?.services!=null' in source for source in asset_sources),
+}
+
+missing = [name for name, ok in checks.items() if not ok]
+if missing:
+    raise SystemExit(
+        "Critical Codex web patches are missing after setup: "
+        + ", ".join(missing)
+        + ". The installed ChatGPT.app likely changed; update scripts/prepare_asar patch signatures."
+    )
+PY
 
 rm -rf scratch/asar/node_modules/better-sqlite3
