@@ -55,12 +55,15 @@ The build now writes everything needed into `dist/`:
 - `dist/codex-web.js`
 - `dist/server.cjs`
 - `dist/asar.tgz`
+- `dist/runtime-node-modules.tgz`
 
 Keep that folder together when you copy or deploy it. `dist/asar.tgz` holds the
-patched app assets, including the upstream Electron-native `better-sqlite3`
-bundle, and extracts them to a macOS temp cache on first run. You do not need
-to copy `dist/node_modules/` or `dist/asar/`. You can still override the
-bundled app files with a prepared `scratch/asar` directory from `npm run setup`:
+patched app assets and `dist/runtime-node-modules.tgz` holds the Node-native
+`better-sqlite3` package tree. Both extract to a macOS temp cache on first run,
+and the launcher rebuilds `better-sqlite3` there if your current Node ABI does
+not match the bundled binary. You do not need to copy `dist/node_modules/` or
+`dist/asar/`. You can still override the bundled app files with a prepared
+`scratch/asar` directory from `npm run setup`:
 
 ```bash
 CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node dist/codex-web.js --port 9000
