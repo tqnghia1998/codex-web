@@ -37,6 +37,7 @@ Do not treat this like a normal greenfield web app. Most behavior is inherited f
 ### Docs
 - `README.md` — user-facing setup/run/build instructions
 - `ARCHITECTURE.md` — short architecture note
+- `PATCHES.md` — full upstream patch/rewrite ledger and upgrade checklist
 - `AGENTS.md` — this file; AI-facing repo rules and logic inventory
 
 ---
@@ -200,6 +201,7 @@ Flow:
 - selected files are uploaded to `POST /__backend/upload`
 - server writes uploads to a temp dir and returns paths
 - upstream code receives those temp paths as if Electron had returned them
+- pasted browser-only files also route through `src/browser/files.ts` via a `chrome.runtime.sendMessage` shim that stages chunked uploads and returns a temp path on finalize
 
 ### 6) Workspace picker path
 
@@ -238,6 +240,9 @@ These labels are the current truth.
   - uses `window.__ELECTRON_SHIM__.services` when present instead of requiring upstream desktop wiring
 - **patch folder-filtered project groups**
   - filters/sorts project groups using `window.__ELECTRON_SHIM__.folderFilterProjectId`
+- **patch local-file URL helper**
+  - rewrites browser local-file URLs to stay on `/@fs/...` instead of `app://fs...`
+  - required for pasted/attached local files and inline local previews
 - **disable Sentry in shell bundle(s)**
 - **disable Sentry in webview bundle(s)**
 
@@ -263,9 +268,6 @@ These labels are the current truth.
   - route-level title sync already exists in shim-owned code
 - **`webview-electron-shim-close-sidebar.patch`**
   - superseded by shim-owned sidebar logic
-- **`webview-use-atfs-for-local-files.patch`**
-  - old local-file target disappeared from current upstream bundle
-  - current file handling uses browser picker + upload bridge instead
 - **`webview-prosemirror-inputmode.patch`**
   - old `inputmode:none` mobile hack target disappeared from current upstream bundle
 
@@ -297,6 +299,8 @@ Use this order:
 Do not start by editing docs or generated dist output.
 
 ---
+
+For the complete historical ledger of every old `patches/*.patch` file, current owner, and what to inspect after an upstream update, see `PATCHES.md`.
 
 ## Things an AI should not forget
 
