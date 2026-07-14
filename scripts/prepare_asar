@@ -180,7 +180,7 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = source.replace("Ngn({beforeSend:", "Ngn({enabled:!1,beforeSend:", 1)
     source = source.replace(
         "function Ign(){if(Bgn)return;Bgn=!0;",
-        "function Ign(){return;Bgn=!0;",
+        "function Ign(){return}",
         1,
     )
     path.write_text(source)
