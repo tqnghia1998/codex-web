@@ -54,11 +54,14 @@ The build now writes everything needed into `dist/`:
 
 - `dist/codex-web.js`
 - `dist/server.cjs`
-- `dist/asar/`
-- `dist/node_modules/`
+- `dist/vendor.cjs`
+- `dist/asar.cjs`
 
-Keep that folder together when you copy or deploy it. You can still override
-the bundled app files with an existing extracted app:
+Keep that folder together when you copy or deploy it. `dist/vendor.cjs` holds
+runtime Node dependencies and `dist/asar.cjs` holds the patched app assets;
+both extract to a macOS temp cache on first run, so you do not need to copy
+`dist/node_modules/` or `dist/asar/`. You can still override the bundled app
+files with an existing extracted app:
 
 ```bash
 CODEX_ASAR_DIR=/absolute/path/to/scratch/asar node dist/codex-web.js --port 9000
