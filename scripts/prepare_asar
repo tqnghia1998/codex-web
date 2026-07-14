@@ -61,7 +61,6 @@ apply_patch() {
 }
 apply_patch patches/webview-remove-csp.patch
 apply_patch patches/webview-style.patch
-apply_patch patches/webview-preload.patch
 apply_patch patches/webview-favicon.patch
 apply_patch patches/webview-pwa.patch
 apply_patch patches/webview-thread-title.patch
@@ -98,12 +97,15 @@ if 'src="./assets/preload.js?v=8"' not in source:
         "<!-- PROD_CSP_TAG_HERE -->\n    <script type=\"module\" src=\"./assets/preload.js?v=8\"></script>",
         1,
     )
+if '<base href="/"' not in source or 'src="./assets/preload.js?v=8"' not in source:
+    raise SystemExit("Failed to patch webview/index.html for preload")
 index.write_text(source)
 PY
 
 python3 - <<'PY'
 from pathlib import Path
 
+patched = False
 for path in Path("scratch/asar/webview/assets").glob("index-*.js"):
     source = path.read_text(errors="ignore")
     updated = source.replace(
@@ -114,12 +116,17 @@ for path in Path("scratch/asar/webview/assets").glob("index-*.js"):
     if updated != source:
         path.write_text(updated)
         print(f"patched bootstrap preload in {path}")
+        patched = True
+
+if not patched:
+    raise SystemExit("Failed to patch index-*.js preload bootstrap")
 PY
 
 python3 - <<'PY'
 import re
 from pathlib import Path
 
+initial_route_patched = False
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
     source, count = re.subn(
@@ -137,6 +144,10 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
         )
         path.write_text(source)
         print(f"patched initial route in {path} (navigation: {navigation_count})")
+        initial_route_patched = True
+
+if not initial_route_patched:
+    raise SystemExit("Failed to patch initial route shim")
 
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
@@ -153,9 +164,9 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
 PY
 
 python3 - <<'PY'
-import re
 from pathlib import Path
 
+patched = False
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
     original = source
@@ -167,7 +178,29 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     if source != original:
         path.write_text(source)
         print(f"patched app-host services in {path}")
+        patched = True
 
+if not patched:
+    raise SystemExit("Failed to patch app-host services")
+PY
+
+python3 - <<'PY'
+from pathlib import Path
+
+patched = False
+needle = "function iDn(e,t){let n=rDn(e,t),r=new Map(n.map((e,t)=>[e,t]));return[...e].sort((e,t)=>(r.get(e.projectId)??2**53-1)-(r.get(t.projectId)??2**53-1))}"
+replacement = "function iDn(e,t){let n=window.__ELECTRON_SHIM__?.folderFilterProjectId,r=n==null?e:e.filter(e=>e.projectId===n||e.path===n),i=rDn(r,t),a=new Map(i.map((e,t)=>[e,t]));return[...r].sort((e,t)=>(a.get(e.projectId)??2**53-1)-(a.get(t.projectId)??2**53-1))}"
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    if needle not in source:
+        continue
+    path.write_text(source.replace(needle, replacement, 1))
+    print(f"patched folder-filtered project groups in {path}")
+    patched = True
+    break
+
+if not patched:
+    raise SystemExit("Failed to patch folder-filtered project groups")
 PY
 while IFS= read -r sentry_bundle; do
   python3 - "$sentry_bundle" <<'PY'
@@ -204,30 +237,6 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
         count=1,
     )
     path.write_text(source)
-PY
-
-python3 - <<'PY'
-from pathlib import Path
-
-index_html = Path("scratch/asar/webview/index.html").read_text(errors="ignore")
-asset_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("*.js")]
-index_sources = [path.read_text(errors="ignore") for path in Path("scratch/asar/webview/assets").glob("index-*.js")]
-
-checks = {
-    "base href injection": '<base href="/" />' in index_html,
-    "preload script tag": 'src="./assets/preload.js?v=8"' in index_html,
-    "bootstrap preload import": any('await import("./preload.js?v=8")' in source for source in index_sources),
-    "initial route shim": any('window.__ELECTRON_SHIM__?.initialRoute??`/`' in source for source in asset_sources),
-    "app-host shim": any('window.__ELECTRON_SHIM__?.services!=null' in source for source in asset_sources),
-}
-
-missing = [name for name, ok in checks.items() if not ok]
-if missing:
-    raise SystemExit(
-        "Critical Codex web patches are missing after setup: "
-        + ", ".join(missing)
-        + ". The installed ChatGPT.app likely changed; update scripts/prepare_asar patch signatures."
-    )
 PY
 
 rm -rf scratch/asar/node_modules/better-sqlite3
