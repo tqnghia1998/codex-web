@@ -682,7 +682,6 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   });
 
   await app.listen({ host: "127.0.0.1", port: options.port });
-  console.log(`IPC bridge listening at ws://127.0.0.1:${options.port}`);
 
   ensureElectronLikeProcessContext();
   installModuleAliasHook();

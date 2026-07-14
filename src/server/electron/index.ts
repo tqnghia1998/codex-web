@@ -54,16 +54,7 @@ function getIpcMainBridgeState(): IpcMainBridgeState {
   return globals.__codexElectronIpcBridge;
 }
 
-const verboseElectronShim =
-  process.env.CODEX_VERBOSE_ELECTRON_SHIM === "1" ||
-  process.env.CODEX_VERBOSE_ELECTRON_SHIM === "true";
-
-function log(method: string, args: unknown[]): void {
-  if (!verboseElectronShim) {
-    return;
-  }
-  console.log(`[electron-main-stub] ${method}`, args);
-}
+function log(_method: string, _args: unknown[]): void {}
 
 function createDeepStub(pathLabel: string): StubFunction {
   const propertyStubs = new Map<PropertyKey, unknown>();
