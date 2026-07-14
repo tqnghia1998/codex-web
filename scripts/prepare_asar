@@ -259,76 +259,41 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
 PY
 
 python3 - <<'PY'
-import re
 from pathlib import Path
 
 patched = False
-pattern = re.compile(r"logger=([A-Za-z0-9_$]+)\.i\(`AppServerConnection`\)")
-for path in Path("scratch/asar/.vite/build").glob("src-*.js"):
+needle = "function m(e){let t=`[${e}] `,n=(e,n,r)=>{l().log(e,`${t}${n}`,i(r))},r=e=>(t,r)=>{n(e,t,r)};return{trace:r(`trace`),debug:r(`debug`),info:r(`info`),warning:r(`warning`),error:r(`error`),log:(e,t,r)=>{n(e,t,r)},dispose:()=>{l().dispose()}}}"
+replacement = "var y=new Set([`git`,`electron-message-handler`,`electron-fetch-wrapper`,`AppServerConnection`]);function m(e){if(y.has(e))return{trace(){},debug(){},info(){},warning(){},error(){},log(){},dispose(){}};let t=`[${e}] `,n=(e,n,r)=>{l().log(e,`${t}${n}`,i(r))},r=e=>(t,r)=>{n(e,t,r)};return{trace:r(`trace`),debug:r(`debug`),info:r(`info`),warning:r(`warning`),error:r(`error`),log:(e,t,r)=>{n(e,t,r)},dispose:()=>{l().dispose()}}}"
+for path in Path("scratch/asar/.vite/build").glob("crash-reporter-env-*.js"):
     source = path.read_text(errors="ignore")
-    source, count = pattern.subn(
-        lambda match: (
-            "logger=((e)=>({trace(){},debug(){},info(){},warning(){},error:e.error.bind(e)}))"
-            f"({match.group(1)}.i(`AppServerConnection`))"
-        ),
-        source,
-        count=1,
-    )
-    if count:
-        path.write_text(source)
-        patched = True
-        break
+    if needle not in source:
+        continue
+    path.write_text(source.replace(needle, replacement, 1))
+    patched = True
+    break
 
 if not patched:
-    raise SystemExit("Failed to patch AppServerConnection logger")
+    raise SystemExit("Failed to patch noisy logger names")
 PY
 
 python3 - <<'PY'
 import re
 from pathlib import Path
 
-patched = False
-pattern = re.compile(r"var ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\.a\(`electron-message-handler`\)")
-for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+pattern = re.compile(r"(?P<prefix>var\s+|,)(?P<name>[A-Za-z0-9_$]+)=(?P<factory>[A-Za-z0-9_$.]+)\(`git`\)")
+replacement = lambda m: (
+    f"{m.group('prefix')}{m.group('name')}=()=>({{trace(){{}},debug(){{}},info(){{}},warning(){{}},error(){{}},log(){{}},dispose(){{}}}})"
+)
+patched = 0
+for path in Path("scratch/asar/.vite/build").glob("*.js"):
     source = path.read_text(errors="ignore")
-    source, count = pattern.subn(
-        lambda match: (
-            f"var {match.group(1)}=()=>({{trace(){{}},debug(){{}},info(){{}},warning(){{}},error(){{}}}})"
-        ),
-        source,
-        count=1,
-    )
+    source, count = pattern.subn(replacement, source)
     if count:
         path.write_text(source)
-        patched = True
-        break
+        patched += count
 
 if not patched:
-    raise SystemExit("Failed to patch electron-message-handler logger")
-PY
-
-python3 - <<'PY'
-import re
-from pathlib import Path
-
-patched = False
-pattern = re.compile(r"var ([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\.a\(`electron-fetch-wrapper`\)")
-for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
-    source = path.read_text(errors="ignore")
-    source, count = pattern.subn(
-        lambda match: (
-            f"var {match.group(1)}=()=>({{trace(){{}},debug(){{}},info(){{}},warning(){{}},error(){{}}}})"
-        ),
-        source,
-        count=1,
-    )
-    if count:
-        path.write_text(source)
-        patched = True
-        break
-
-if not patched:
-    raise SystemExit("Failed to patch electron-fetch-wrapper logger")
+    raise SystemExit("Failed to patch inlined git loggers")
 PY
 
 
