@@ -8,6 +8,7 @@ declare global {
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,9 +46,35 @@ function applyRawCorsHeaders(target: {
   }
 }
 
-const asarRoot = path.resolve(
-  process.env.CODEX_ASAR_DIR ?? path.resolve(process.cwd(), "scratch/asar"),
-);
+function resolveAsarRoot(): string {
+  const scriptPath = process.argv[1] ? path.resolve(process.argv[1]) : null;
+  const scriptDir = scriptPath ? path.dirname(scriptPath) : null;
+  const candidates = [...new Set([
+    process.env.CODEX_ASAR_DIR,
+    scriptDir ? path.join(scriptDir, "scratch/asar") : null,
+    scriptDir ? path.join(scriptDir, "../scratch/asar") : null,
+    path.resolve(process.cwd(), "scratch/asar"),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(value)))];
+
+  for (const candidate of candidates) {
+    if (fsSync.existsSync(path.join(candidate, "package.json"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    [
+      "Codex web assets not found.",
+      "Expected a patched scratch/asar directory containing package.json.",
+      "Run npm run setup and either keep scratch/asar next to the bundle, or set CODEX_ASAR_DIR to that directory.",
+      `Checked: ${candidates.join(", ")}`,
+    ].join(" "),
+  );
+}
+
+const asarRoot = resolveAsarRoot();
 
 type RendererToMainMessage =
   | {
