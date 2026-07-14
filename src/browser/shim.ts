@@ -1,4 +1,5 @@
 import {
+  dispatchNavigateToRoute,
   mapBrowserPathToInitialRoute,
   mapMemoryPathToBrowserPath,
 } from "./routes";
@@ -511,21 +512,22 @@ if (initialRoute.browserPath) {
 electronShim.initialSidebarState = initialSidebarState;
 electronShim.onMemoryNavigationChanged = (navigation) => {
   const path = navigation.location.pathname;
-  const folder = new URLSearchParams(window.location.search).get("folder")?.trim();
-  if (path === "/" && folder && navigation.action !== "POP") {
+  if (path === "/" && folderToAdd && navigation.action !== "POP") {
     dispatchNavigateToRoute(
-      `/projects?${new URLSearchParams({ projectId: folder })}`,
+      `/projects?${new URLSearchParams({ projectId: folderToAdd })}`,
     );
     return;
   }
 
   if (
     navigation.action !== "POP" &&
+const folderToAdd = new URLSearchParams(window.location.search).get("folder")?.trim();
     mobileMediaQuery.matches &&
     shouldCloseSidebarForMemoryPath(path)
   ) {
     electronShim.closeSidebar?.();
   }
+electronShim.folderFilterProjectId = folderToAdd || undefined;
 
   const browserPath = mapMemoryPathToBrowserPath(path);
   if (browserPath == null) {
@@ -709,7 +711,6 @@ export const ipcRenderer = {
 
 ensureSocket();
 
-const folderToAdd = new URLSearchParams(window.location.search).get("folder")?.trim();
 if (folderToAdd) {
   void ipcRenderer.invoke("codex_desktop:message-from-view", {
     type: "electron-add-new-workspace-root-option",

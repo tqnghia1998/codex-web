@@ -38,8 +38,6 @@ the renderer process. these are applied at postinstall time through the
 in [./patches](./patches) and applied ontop of the prettified code extracted
 from the upstream app. care was taken here to patch at installation time to
 avoid redistributing the original code.
-the [./patches/webview-preload.patch](patches/webview-preload.patch) connects
-the shimmed preload script to the index.html entrypoint.
 
 we aim for the patches to be as small as possible as they're the most annoying
 part to change. the patches today are mostly around routing, urls, page title,
