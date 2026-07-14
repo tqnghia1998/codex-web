@@ -12,7 +12,8 @@
   "scripts": {
     "setup": "./scripts/prepare_asar && vite build --config vite.browser.config.ts && cd src/server && tsc",
     "build": "npm run setup && node scripts/build.mjs",
-    "run": "CODEX_CLI_PATH=${CODEX_CLI_PATH:-$(command -v codex)} node src/server/main.js"
+    "run": "CODEX_CLI_PATH=${CODEX_CLI_PATH:-$(command -v codex)} node src/server/main.js",
+    "smoke": "node scripts/smoke.mjs"
   },
   "repository": "git@github.com:0xcaff/codex-web.git",
   "author": "martin <martincharles07@gmail.com>",
