@@ -17,6 +17,7 @@ type IpcListener = (event: unknown, ...args: unknown[]) => void;
 type RendererToMainMessage =
   | {
       type: "ipc-renderer-invoke";
+      clientId: string;
       requestId: string;
       channel: string;
       args: unknown[];
@@ -38,11 +39,13 @@ type RendererToMainMessage =
     }
   | {
       type: "ipc-renderer-send";
+      clientId: string;
       channel: string;
       args: unknown[];
     }
   | {
       type: "workspace-directory-entries-request";
+      clientId: string;
       requestId: string;
       directoryPath: string | null;
       directoriesOnly: boolean;
@@ -90,6 +93,7 @@ type MainToRendererMessage =
 
 const RECONNECT_DELAY_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const clientId = crypto.randomUUID();
 
 type MemoryNavigationChange = {
   action: "POP" | "PUSH" | "REPLACE";
@@ -139,7 +143,6 @@ const pendingInvokes = new Map<
   {
     reject: (reason?: unknown) => void;
     resolve: (value: unknown) => void;
-    timeoutId: number;
   }
 >();
 const pendingDirectoryEntries = new Map<
@@ -186,7 +189,6 @@ function handleIncomingMessage(message: MainToRendererMessage): void {
       return;
     }
     pendingInvokes.delete(message.requestId);
-    window.clearTimeout(pending.timeoutId);
     if (message.ok) {
       pending.resolve(message.result);
       return;
@@ -293,16 +295,10 @@ function nextRequestId(): string {
 function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => {
-      if (!pendingInvokes.delete(requestId)) {
-        return;
-      }
-      reject(timeoutError(`IPC invoke response for ${channel}`));
-    }, REQUEST_TIMEOUT_MS);
-
-    pendingInvokes.set(requestId, { resolve, reject, timeoutId });
+    pendingInvokes.set(requestId, { resolve, reject });
     enqueueMessage({
       type: "ipc-renderer-invoke",
+      clientId,
       requestId,
       channel,
       args,
@@ -450,6 +446,7 @@ function requestWorkspaceDirectoryEntries(
     pendingDirectoryEntries.set(requestId, { resolve, reject, timeoutId });
     enqueueMessage({
       type: "workspace-directory-entries-request",
+      clientId,
       requestId,
       directoryPath,
       directoriesOnly: true,
@@ -605,6 +602,7 @@ export const ipcRenderer = {
   send(channel: string, ...args: unknown[]): void {
     enqueueMessage({
       type: "ipc-renderer-send",
+      clientId,
       channel,
       args,
     });
@@ -653,6 +651,7 @@ export const ipcRenderer = {
 
     enqueueMessage({
       type: "ipc-renderer-send",
+      clientId,
       channel,
       args: [message],
     });
