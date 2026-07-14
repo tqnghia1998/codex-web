@@ -32,16 +32,14 @@ as a stand-in for electron in the renderer process and then setting up preload
 to run in the renderer realm (see
 [vite.browser.config.ts](./vite.browser.config.ts)).
 
-next, we apply a series of patches to both code running in the main process and
-the renderer process. these are applied at postinstall time through the
-[`prepare_asar`](./scripts/prepare_asar) script. patches are located
-in [./patches](./patches) and applied ontop of the prettified code extracted
-from the upstream app. care was taken here to patch at installation time to
-avoid redistributing the original code.
+next, we rewrite a small set of upstream assets in both the main process and
+the renderer process. these rewrites live in
+[`prepare_asar`](./scripts/prepare_asar) and run after extracting the upstream
+app. we patch at install time to avoid redistributing the original code.
 
-we aim for the patches to be as small as possible as they're the most annoying
-part to change. the patches today are mostly around routing, urls, page title,
-pwa and mobile behavior.
+we aim for the rewrites to be as small as possible as they're the most annoying
+part to change. today they mostly cover routing, urls, pwa setup and a few
+renderer/runtime shims.
 
 to connect the ipc from the renderer process to the main process, we use a
 websocket for most messages intercepting and handing a small handful of messages
