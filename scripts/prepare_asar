@@ -239,4 +239,34 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     path.write_text(source)
 PY
 
+python3 - <<'PY'
+from pathlib import Path
+
+main_patched = False
+for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+    source = path.read_text(errors="ignore")
+    updated = source.replace(",p=n.h(o),", ',p="error",', 1)
+    updated = updated.replace("maxLogLevel:o", 'maxLogLevel:"error"', 1)
+    if updated != source:
+        path.write_text(updated)
+        print(f"patched main log level in {path}")
+        main_patched = True
+        break
+
+if not main_patched:
+    raise SystemExit("Failed to patch main log level")
+
+worker = Path("scratch/asar/.vite/build/worker.js")
+source = worker.read_text(errors="ignore")
+updated = source.replace(
+    "nce(J9, Y9, q9.codexAppSessionId, tde);",
+    'nce(J9, Y9, q9.codexAppSessionId, "error");',
+    1,
+)
+if updated == source:
+    raise SystemExit("Failed to patch worker log level")
+worker.write_text(updated)
+print(f"patched worker log level in {worker}")
+PY
+
 rm -rf scratch/asar/node_modules/better-sqlite3
