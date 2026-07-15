@@ -638,24 +638,42 @@ function parsePersistedUiState(raw: string | null): PersistedUiState | null {
   }
 }
 
+function getStoredUiStateItem(key: string): string | null {
+  return window.localStorage.getItem(key) ?? window.sessionStorage.getItem(key);
+}
+
+function clearStoredUiStateItem(key: string): void {
+  window.localStorage.removeItem(key);
+  window.sessionStorage.removeItem(key);
+}
+
 function loadPersistedUiState(pageKey = getCurrentPageKey()): PersistedUiState | null {
-  const persistedState = parsePersistedUiState(
-    window.sessionStorage.getItem(getUiStateStorageKey(pageKey)),
-  );
+  const storageKey = getUiStateStorageKey(pageKey);
+  const localStateRaw = window.localStorage.getItem(storageKey);
+  const persistedState = parsePersistedUiState(localStateRaw ?? window.sessionStorage.getItem(storageKey));
   if (persistedState) {
+    if (localStateRaw === null) {
+      savePersistedUiState(persistedState);
+    }
     return persistedState;
   }
 
-  const legacyState = parsePersistedUiState(
-    window.sessionStorage.getItem(UI_STATE_LEGACY_STORAGE_KEY),
-  );
-  return legacyState?.pageKey === pageKey ? legacyState : null;
+  const legacyState = parsePersistedUiState(getStoredUiStateItem(UI_STATE_LEGACY_STORAGE_KEY));
+  if (legacyState?.pageKey !== pageKey) {
+    return null;
+  }
+
+  savePersistedUiState(legacyState);
+  return legacyState;
 }
 
 function savePersistedUiState(state: PersistedUiState, serializedState?: string): void {
   const nextSerializedState = serializedState ?? JSON.stringify(state);
-  window.sessionStorage.setItem(getUiStateStorageKey(state.pageKey), nextSerializedState);
-  window.sessionStorage.removeItem(UI_STATE_LEGACY_STORAGE_KEY);
+  const storageKey = getUiStateStorageKey(state.pageKey);
+  // Shared across tabs on purpose so the UI survives a full browser restart.
+  window.localStorage.setItem(storageKey, nextSerializedState);
+  clearStoredUiStateItem(UI_STATE_LEGACY_STORAGE_KEY);
+  window.sessionStorage.removeItem(storageKey);
 }
 
 function normalizeUiLabel(value: string | null | undefined): string | null {
