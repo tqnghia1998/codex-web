@@ -215,6 +215,8 @@ let requestCounter = 0;
 let persistUiStateTimeoutId: number | null = null;
 let lastPersistedUiStateJson: string | null = null;
 let uiStateRestoreInProgress = false;
+let reviewDefaultSourceAttemptedPageKey: string | null = null;
+let reviewDefaultSourceInFlightPageKey: string | null = null;
 let socket: WebSocket | null = null;
 let reconnectTimeoutId: number | null = null;
 const outboundQueue: RendererToMainMessage[] = [];
@@ -585,6 +587,10 @@ function savePersistedUiState(state: PersistedUiState, serializedState?: string)
   window.localStorage.setItem(storageKey, nextSerializedState);
   clearStoredUiStateItem(UI_STATE_LEGACY_STORAGE_KEY);
   window.sessionStorage.removeItem(storageKey);
+}
+
+function hasStoredReviewSourcePreference(pageKey = getCurrentPageKey()): boolean {
+  return loadPersistedUiState(pageKey)?.review?.sourceKind !== null;
 }
 
 function normalizeUiLabel(value: string | null | undefined): string | null {
@@ -1279,6 +1285,60 @@ async function setReviewDiffLayout(layout: ReviewDiffLayout | null): Promise<voi
   await waitForCondition(() => getReviewDiffLayout() === layout, 2_000);
 }
 
+async function selectDefaultReviewSource(): Promise<void> {
+  const pageKey = getCurrentPageKey();
+  if (
+    reviewDefaultSourceInFlightPageKey === pageKey ||
+    hasStoredReviewSourcePreference(pageKey) ||
+    getActivePanelTab("right") !== "Review"
+  ) {
+    return;
+  }
+
+  const sourceButton = getReviewSourceButton();
+  const sourceKind = getReviewSourceKind();
+  if (!sourceButton || !sourceKind || sourceKind === "Unstaged") {
+    return;
+  }
+
+  reviewDefaultSourceInFlightPageKey = pageKey;
+  try {
+    triggerUserClick(sourceButton);
+    if (await selectVisibleMenuItem("Unstaged")) {
+      const applied = await waitForCondition(
+        () => getCurrentPageKey() === pageKey && getReviewSourceKind() === "Unstaged",
+        2_000,
+      );
+      if (applied) {
+        schedulePersistUiState();
+      }
+    }
+  } finally {
+    if (reviewDefaultSourceInFlightPageKey === pageKey) {
+      reviewDefaultSourceInFlightPageKey = null;
+    }
+  }
+}
+
+function maybeSelectDefaultReviewSource(): void {
+  const pageKey = getCurrentPageKey();
+  if (getActivePanelTab("right") !== "Review") {
+    reviewDefaultSourceAttemptedPageKey = null;
+    return;
+  }
+
+  if (!getReviewSourceButton() || !getReviewSourceKind()) {
+    return;
+  }
+
+  if (reviewDefaultSourceAttemptedPageKey === pageKey) {
+    return;
+  }
+
+  reviewDefaultSourceAttemptedPageKey = pageKey;
+  void selectDefaultReviewSource();
+}
+
 async function restoreReviewSource(state: PersistedReviewState): Promise<void> {
   if (!state.sourceKind) {
     return;
@@ -1675,6 +1735,7 @@ function initializeUiStatePersistence(state: PersistedUiState | null): void {
 
     const observer = new MutationObserver(() => {
       ensureUiStateScrollListeners();
+      maybeSelectDefaultReviewSource();
       if (!uiStateRestoreInProgress) {
         schedulePersistUiState();
       }
@@ -1690,6 +1751,7 @@ function initializeUiStatePersistence(state: PersistedUiState | null): void {
     }
 
     schedulePersistUiState();
+    maybeSelectDefaultReviewSource();
   };
 
   if (document.body) {
