@@ -105,6 +105,10 @@ type MainToRendererMessage =
 
 const RECONNECT_DELAY_MS = 1_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const UI_STATE_STORAGE_KEY_PREFIX = "codex-web:ui-state:v2:";
+const UI_STATE_LEGACY_STORAGE_KEY = "codex-web:ui-state:v1";
+const UI_STATE_RESTORE_TIMEOUT_MS = 5_000;
+const UI_STATE_RESTORE_POLL_MS = 100;
 const clientId = crypto.randomUUID();
 
 type MemoryNavigationChange = {
@@ -174,7 +178,43 @@ declare global {
 
 declare const __CODEX_APP_VERSION__: string;
 
+type ReviewDiffLayout = "split" | "unified";
+
+type ReviewSourceKind = "Unstaged" | "Staged" | "Commit" | "Branch" | "Last Turn";
+
+type PersistedReviewState = {
+  sourceKind: ReviewSourceKind | null;
+  refLabel: string | null;
+  fileAbsolutePath: string | null;
+  fileTreePath: string | null;
+  fileExpanded: boolean | null;
+  fileFilterQuery: string | null;
+  fileTreeScrollTop: number | null;
+  filesVisible: boolean;
+  diffLayout: ReviewDiffLayout | null;
+  reviewScrollTop: number | null;
+};
+
+type PersistedUiState = {
+  pageKey: string;
+  sidebarOpen: boolean;
+  sidePanelActiveTab: string | null;
+  sidePanelOpen: boolean;
+  bottomPanelActiveTab: string | null;
+  bottomPanelOpen: boolean;
+  review: PersistedReviewState | null;
+};
+
+const REVIEW_DIFF_LAYOUT_LABELS: Record<ReviewDiffLayout, string> = {
+  split: "Switch to unified diff",
+  unified: "Switch to split diff",
+};
+const uiStateScrollTargets = new WeakSet<EventTarget>();
+
 let requestCounter = 0;
+let persistUiStateTimeoutId: number | null = null;
+let lastPersistedUiStateJson: string | null = null;
+let uiStateRestoreInProgress = false;
 let socket: WebSocket | null = null;
 let reconnectTimeoutId: number | null = null;
 const outboundQueue: RendererToMainMessage[] = [];
@@ -509,9 +549,1220 @@ function requestWorkspaceDirectoryEntries(
   });
 }
 
+function getCurrentPageKey(): string {
+  return `${window.location.pathname}${window.location.search}`;
+}
+
+function getUiStateStorageKey(pageKey: string): string {
+  return `${UI_STATE_STORAGE_KEY_PREFIX}${encodeURIComponent(pageKey)}`;
+}
+
+function isReviewSourceKind(value: string | null): value is ReviewSourceKind {
+  switch (value) {
+    case "Unstaged":
+    case "Staged":
+    case "Commit":
+    case "Branch":
+    case "Last Turn":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function parsePersistedReviewState(value: unknown): PersistedReviewState | null {
+  if (!isRecord(value) || typeof value.filesVisible !== "boolean") {
+    return null;
+  }
+
+  const sourceKind =
+    typeof value.sourceKind === "string" && isReviewSourceKind(value.sourceKind)
+      ? value.sourceKind
+      : null;
+  const diffLayout =
+    value.diffLayout === "split" || value.diffLayout === "unified"
+      ? value.diffLayout
+      : null;
+
+  return {
+    sourceKind,
+    refLabel: typeof value.refLabel === "string" ? value.refLabel : null,
+    fileAbsolutePath:
+      typeof value.fileAbsolutePath === "string" ? value.fileAbsolutePath : null,
+    fileTreePath: typeof value.fileTreePath === "string" ? value.fileTreePath : null,
+    fileExpanded: typeof value.fileExpanded === "boolean" ? value.fileExpanded : null,
+    fileFilterQuery:
+      typeof value.fileFilterQuery === "string" ? value.fileFilterQuery : null,
+    fileTreeScrollTop:
+      typeof value.fileTreeScrollTop === "number" ? value.fileTreeScrollTop : null,
+    filesVisible: value.filesVisible,
+    diffLayout,
+    reviewScrollTop: typeof value.reviewScrollTop === "number" ? value.reviewScrollTop : null,
+  };
+}
+
+function parsePersistedUiState(raw: string | null): PersistedUiState | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const value = JSON.parse(raw);
+    if (
+      !isRecord(value) ||
+      typeof value.pageKey !== "string" ||
+      typeof value.sidebarOpen !== "boolean" ||
+      typeof value.sidePanelOpen !== "boolean" ||
+      typeof value.bottomPanelOpen !== "boolean"
+    ) {
+      return null;
+    }
+
+    return {
+      pageKey: value.pageKey,
+      sidebarOpen: value.sidebarOpen,
+      sidePanelActiveTab:
+        typeof value.sidePanelActiveTab === "string" ? value.sidePanelActiveTab : null,
+      sidePanelOpen: value.sidePanelOpen,
+      bottomPanelActiveTab:
+        typeof value.bottomPanelActiveTab === "string" ? value.bottomPanelActiveTab : null,
+      bottomPanelOpen: value.bottomPanelOpen,
+      review: parsePersistedReviewState(value.review),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadPersistedUiState(pageKey = getCurrentPageKey()): PersistedUiState | null {
+  const persistedState = parsePersistedUiState(
+    window.sessionStorage.getItem(getUiStateStorageKey(pageKey)),
+  );
+  if (persistedState) {
+    return persistedState;
+  }
+
+  const legacyState = parsePersistedUiState(
+    window.sessionStorage.getItem(UI_STATE_LEGACY_STORAGE_KEY),
+  );
+  return legacyState?.pageKey === pageKey ? legacyState : null;
+}
+
+function savePersistedUiState(state: PersistedUiState, serializedState?: string): void {
+  const nextSerializedState = serializedState ?? JSON.stringify(state);
+  window.sessionStorage.setItem(getUiStateStorageKey(state.pageKey), nextSerializedState);
+  window.sessionStorage.removeItem(UI_STATE_LEGACY_STORAGE_KEY);
+}
+
+function normalizeUiLabel(value: string | null | undefined): string | null {
+  const normalized = value
+    ?.replace(/\s*[⌘⌥⌃⇧].*$/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized ? normalized : null;
+}
+
+function isVisibleElement<T extends Element>(element: T | null): element is T {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+
+  const rect = element.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    return false;
+  }
+
+  const style = window.getComputedStyle(element);
+  return style.display !== "none" && style.visibility !== "hidden";
+}
+
+function getNormalizedElementLabel(element: Element | null): string | null {
+  if (!(element instanceof HTMLElement)) {
+    return null;
+  }
+
+  return normalizeUiLabel(
+    element.getAttribute("aria-label") ?? element.textContent ?? element.title,
+  );
+}
+
+function hasUiLabel(element: Element | null, label: string, exact = true): boolean {
+  const actualLabel = getNormalizedElementLabel(element);
+  const expectedLabel = normalizeUiLabel(label);
+  if (!actualLabel || !expectedLabel) {
+    return false;
+  }
+
+  return exact ? actualLabel === expectedLabel : actualLabel.includes(expectedLabel);
+}
+
+function getVisibleButtons(root: ParentNode = document): HTMLButtonElement[] {
+  return Array.from(root.querySelectorAll<HTMLButtonElement>("button")).filter(isVisibleElement);
+}
+
+function findVisibleButton(
+  label: string,
+  root: ParentNode = document,
+  exact = true,
+): HTMLButtonElement | null {
+  const buttons = getVisibleButtons(root);
+  for (let index = buttons.length - 1; index >= 0; index -= 1) {
+    const button = buttons[index];
+    if (hasUiLabel(button, label, exact)) {
+      return button;
+    }
+  }
+
+  return null;
+}
+
+function findVisibleMenuItem(label: string, exact = true): HTMLElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+      .filter(isVisibleElement)
+      .find((item) => hasUiLabel(item, label, exact)) ?? null
+  );
+}
+
+function getVisibleMenuItems(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).filter(
+    isVisibleElement,
+  );
+}
+
+function findVisibleTextControl(
+  label: string,
+  root: ParentNode = document,
+): HTMLInputElement | HTMLTextAreaElement | null {
+  return (
+    Array.from(root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"))
+      .filter(isVisibleElement)
+      .find((element) => hasUiLabel(element, label)) ?? null
+  );
+}
+
+function setTextControlValue(
+  element: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+): void {
+  const prototype =
+    element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (valueSetter) {
+    valueSetter.call(element, value);
+  } else {
+    element.value = value;
+  }
+  element.dispatchEvent(new Event("input", { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+function triggerUserClick(element: HTMLElement | null): boolean {
+  if (!element) {
+    return false;
+  }
+
+  element.focus?.();
+  const pointerEventCtor = window.PointerEvent ?? window.MouseEvent;
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup"]) {
+    element.dispatchEvent(
+      new pointerEventCtor(type, {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        button: 0,
+      }),
+    );
+  }
+  element.click();
+
+  return true;
+}
+
+function getSidebarToggleButton(): HTMLButtonElement | null {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>("[data-app-shell-sidebar-trigger]"))
+    .filter(isVisibleElement)
+    .at(-1) ?? null;
+}
+
+function isSidebarOpen(): boolean {
+  const button = getSidebarToggleButton();
+  if (!button) {
+    return false;
+  }
+
+  return normalizeUiLabel(button.getAttribute("aria-label") ?? button.textContent) !== "Show sidebar";
+}
+
+function getPanelToggleButtons(panel: "right" | "bottom"): HTMLButtonElement[] {
+  const label = panel === "right" ? "Toggle side panel" : "Toggle bottom panel";
+  const normalizedLabel = normalizeUiLabel(label);
+  if (!normalizedLabel) {
+    return [];
+  }
+
+  return getVisibleButtons().filter((button) => {
+    const buttonLabel = normalizeUiLabel(
+      button.getAttribute("aria-label") ?? button.textContent ?? button.title,
+    );
+    return buttonLabel === normalizedLabel;
+  });
+}
+
+function getPanelToggleButton(panel: "right" | "bottom"): HTMLButtonElement | null {
+  const buttons = getPanelToggleButtons(panel);
+  return (
+    buttons.find((button) => button.getAttribute("aria-pressed") === "true") ??
+    buttons.at(-1) ??
+    null
+  );
+}
+
+function isPanelOpen(panel: "right" | "bottom"): boolean {
+  return getPanelToggleButtons(panel).some(
+    (button) => button.getAttribute("aria-pressed") === "true",
+  );
+}
+
+function getPanelTabController(panel: "right" | "bottom"): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-app-shell-tab-controller="${panel}"]`);
+}
+
+function getActivePanelTab(panel: "right" | "bottom"): string | null {
+  return normalizeUiLabel(
+    getPanelTabController(panel)?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+  );
+}
+
+function getReviewPanel(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    '[data-app-shell-tab-panel-controller="right"][role="tabpanel"][aria-label="Review"]',
+  );
+}
+
+function getReviewSourceButton(): HTMLButtonElement | null {
+  const panel = getReviewPanel();
+  if (!panel) {
+    return null;
+  }
+
+  return (
+    getVisibleButtons(panel).find((button) =>
+      isReviewSourceKind(getNormalizedElementLabel(button)),
+    ) ?? null
+  );
+}
+
+function getReviewSourceKind(): ReviewSourceKind | null {
+  const label = getNormalizedElementLabel(getReviewSourceButton());
+  return isReviewSourceKind(label) ? label : null;
+}
+
+function getReviewCurrentFileContainer(): HTMLElement | null {
+  return getReviewPanel()?.querySelector<HTMLElement>("[data-review-path]") ?? null;
+}
+
+function getReviewCurrentFileButton(): HTMLButtonElement | null {
+  return getReviewCurrentFileContainer()?.querySelector<HTMLButtonElement>("button") ?? null;
+}
+
+function getReviewAbsoluteFilePath(): string | null {
+  return getReviewCurrentFileContainer()?.getAttribute("data-review-path") ?? null;
+}
+
+function getReviewHeader(): HTMLElement | null {
+  return getReviewPanel()?.querySelector<HTMLElement>("div.border-b") ?? null;
+}
+
+function getReviewHeaderPrimaryRow(): HTMLElement | null {
+  return getReviewSourceButton()?.parentElement ?? null;
+}
+
+function getReviewRefButton(): HTMLButtonElement | null {
+  const header = getReviewHeader();
+  const sourceButton = getReviewSourceButton();
+  if (!header || !sourceButton) {
+    return null;
+  }
+
+  return (
+    getVisibleButtons(header).find((button) => {
+      const label = getNormalizedElementLabel(button);
+      return (
+        button !== sourceButton &&
+        label !== null &&
+        label !== "Create PR" &&
+        button.getAttribute("aria-label") === null &&
+        !isReviewSourceKind(label)
+      );
+    }) ?? null
+  );
+}
+
+function getReviewCommitRefLabel(): string | null {
+  if (getReviewSourceKind() !== "Commit") {
+    return null;
+  }
+
+  const row = getReviewHeaderPrimaryRow();
+  const sourceButton = getReviewSourceButton();
+  if (!row || !sourceButton) {
+    return null;
+  }
+
+  const rowLabel = normalizeUiLabel(row.textContent);
+  const sourceLabel = getNormalizedElementLabel(sourceButton);
+  if (rowLabel && sourceLabel && rowLabel.startsWith(sourceLabel)) {
+    const commitLabel = normalizeUiLabel(rowLabel.slice(sourceLabel.length));
+    if (commitLabel) {
+      return commitLabel;
+    }
+  }
+
+  const commitLabel = normalizeUiLabel(
+    Array.from(row.querySelectorAll<HTMLElement>("span"))
+      .filter(isVisibleElement)
+      .filter((element) => !sourceButton.contains(element))
+      .filter((element) => element.closest('[data-thread-find-skip="true"]') === null)
+      .map((element) => getNormalizedElementLabel(element))
+      .filter((label): label is string => label !== null)
+      .join(" "),
+  );
+  return commitLabel;
+}
+
+function getReviewRefLabel(): string | null {
+  return getReviewCommitRefLabel() ?? getNormalizedElementLabel(getReviewRefButton());
+}
+
+function getReviewToggleFilesButton(): HTMLButtonElement | null {
+  const panel = getReviewPanel();
+  if (!panel) {
+    return null;
+  }
+
+  return (
+    getVisibleButtons(panel).find((button) => {
+      const label = getNormalizedElementLabel(button);
+      return label === "Hide files" || label === "Show files";
+    }) ?? null
+  );
+}
+
+function areReviewFilesVisible(): boolean {
+  const toggleButton = getReviewToggleFilesButton();
+  const label = getNormalizedElementLabel(toggleButton);
+  if (label === "Hide files") {
+    return true;
+  }
+  if (label === "Show files") {
+    return false;
+  }
+
+  return isVisibleElement(getReviewFileTreeHost());
+}
+
+function getReviewDiffLayoutButton(): HTMLButtonElement | null {
+  const panel = getReviewPanel();
+  if (!panel) {
+    return null;
+  }
+
+  return (
+    getVisibleButtons(panel).find((button) => {
+      const label = getNormalizedElementLabel(button);
+      return label === REVIEW_DIFF_LAYOUT_LABELS.split || label === REVIEW_DIFF_LAYOUT_LABELS.unified;
+    }) ?? null
+  );
+}
+
+function getReviewDiffLayout(): ReviewDiffLayout | null {
+  const label = getNormalizedElementLabel(getReviewDiffLayoutButton());
+  if (label === REVIEW_DIFF_LAYOUT_LABELS.unified) {
+    return "unified";
+  }
+  if (label === REVIEW_DIFF_LAYOUT_LABELS.split) {
+    return "split";
+  }
+
+  return null;
+}
+
+function getReviewFileExpandedToggle(): HTMLButtonElement | null {
+  return getReviewPanel()?.querySelector<HTMLButtonElement>("[data-app-action-review-file-toggle]") ?? null;
+}
+
+function isReviewFileExpanded(): boolean | null {
+  const value = getReviewFileExpandedToggle()?.getAttribute("data-app-action-review-file-expanded");
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+
+  return null;
+}
+
+function getReviewScrollContainer(): HTMLElement | null {
+  return getReviewPanel()?.querySelector<HTMLElement>("[data-app-action-review-scroll]") ?? null;
+}
+
+function getReviewFileFilterInput(): HTMLInputElement | HTMLTextAreaElement | null {
+  const panel = getReviewPanel();
+  return panel ? findVisibleTextControl("Filter files", panel) : null;
+}
+
+function getReviewFileTreeHost(): HTMLElement | null {
+  return getReviewPanel()?.querySelector<HTMLElement>("file-tree-container,[data-file-tree-virtualized]") ?? null;
+}
+
+function getReviewFileTreeRoot(): ShadowRoot | null {
+  return getReviewFileTreeHost()?.shadowRoot ?? null;
+}
+
+function getReviewFileTreeScrollContainer(): HTMLElement | null {
+  return getReviewFileTreeRoot()?.querySelector<HTMLElement>("[data-file-tree-virtualized-scroll='true']") ?? null;
+}
+
+function getReviewFileTreeItemByPath(path: string): HTMLButtonElement | null {
+  const item = getReviewFileTreeRoot()?.querySelector<HTMLButtonElement>(
+    `[role="treeitem"][data-item-path="${CSS.escape(path)}"]`,
+  ) ?? null;
+  return isVisibleElement(item) ? item : null;
+}
+
+function getSelectedReviewFileTreePath(): string | null {
+  return (
+    getReviewFileTreeRoot()
+      ?.querySelector<HTMLElement>('[role="treeitem"][data-item-selected="true"][data-item-path]')
+      ?.getAttribute("data-item-path") ?? null
+  );
+}
+
+function getReviewFileFilterQuery(): string | null {
+  return getReviewFileFilterInput()?.value ?? null;
+}
+
+function captureReviewState(): PersistedReviewState | null {
+  if (getActivePanelTab("right") !== "Review") {
+    return null;
+  }
+
+  return {
+    sourceKind: getReviewSourceKind(),
+    refLabel: getReviewRefLabel(),
+    fileAbsolutePath: getReviewAbsoluteFilePath(),
+    fileTreePath: getSelectedReviewFileTreePath(),
+    fileExpanded: isReviewFileExpanded(),
+    fileFilterQuery: getReviewFileFilterQuery(),
+    fileTreeScrollTop: getReviewFileTreeScrollContainer()?.scrollTop ?? null,
+    filesVisible: areReviewFilesVisible(),
+    diffLayout: getReviewDiffLayout(),
+    reviewScrollTop: getReviewScrollContainer()?.scrollTop ?? null,
+  };
+}
+
+function captureUiState(): PersistedUiState {
+  return {
+    pageKey: getCurrentPageKey(),
+    sidebarOpen: isSidebarOpen(),
+    sidePanelActiveTab: getActivePanelTab("right"),
+    sidePanelOpen: isPanelOpen("right"),
+    bottomPanelActiveTab: getActivePanelTab("bottom"),
+    bottomPanelOpen: isPanelOpen("bottom"),
+    review: null,
+  };
+}
+
+function persistUiState(): void {
+  const nextState = captureUiState();
+  const serializedState = JSON.stringify(nextState);
+  if (serializedState === lastPersistedUiStateJson) {
+    return;
+  }
+
+  lastPersistedUiStateJson = serializedState;
+  savePersistedUiState(nextState, serializedState);
+}
+
+function schedulePersistUiState(): void {
+  if (uiStateRestoreInProgress || persistUiStateTimeoutId !== null) {
+    return;
+  }
+
+  persistUiStateTimeoutId = window.setTimeout(() => {
+    persistUiStateTimeoutId = null;
+    if (!uiStateRestoreInProgress) {
+      persistUiState();
+    }
+  }, 50);
+}
+
+function onUiStateScroll(): void {
+  schedulePersistUiState();
+}
+
+function addUiStateScrollListener(target: EventTarget | null | undefined): void {
+  if (!target || uiStateScrollTargets.has(target)) {
+    return;
+  }
+
+  uiStateScrollTargets.add(target);
+  target.addEventListener("scroll", onUiStateScroll, { passive: true });
+}
+
+function ensureUiStateScrollListeners(): void {
+  addUiStateScrollListener(window);
+  addUiStateScrollListener(document);
+  addUiStateScrollListener(getReviewScrollContainer());
+  addUiStateScrollListener(getReviewFileTreeScrollContainer());
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function waitForCondition(
+  check: () => boolean,
+  timeoutMs = UI_STATE_RESTORE_TIMEOUT_MS,
+): Promise<boolean> {
+  if (check()) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const intervalId = window.setInterval(() => {
+      const matched = check();
+      if (matched || Date.now() >= deadline) {
+        window.clearInterval(intervalId);
+        resolve(matched);
+      }
+    }, UI_STATE_RESTORE_POLL_MS);
+  });
+}
+
+async function restorePanelTab(
+  panel: "right" | "bottom",
+  label: string,
+): Promise<boolean> {
+  if (getActivePanelTab(panel) === label) {
+    return true;
+  }
+
+  const controller = getPanelTabController(panel);
+  const openTabLabel = panel === "right" ? "Open side panel tab" : "Open bottom panel tab";
+
+  await waitForCondition(() => {
+    if (getActivePanelTab(panel) === label) {
+      return true;
+    }
+
+    return (
+      findVisibleButton(label, controller ?? document) !== null ||
+      findVisibleButton(openTabLabel, controller ?? document) !== null ||
+      findVisibleButton(openTabLabel) !== null
+    );
+  });
+
+  if (getActivePanelTab(panel) === label) {
+    return true;
+  }
+
+  const directButton =
+    findVisibleButton(label, controller ?? document) ?? findVisibleButton(label);
+  if (directButton) {
+    triggerUserClick(directButton);
+    return waitForCondition(() => getActivePanelTab(panel) === label);
+  }
+
+  const openTabButton =
+    findVisibleButton(openTabLabel, controller ?? document) ??
+    findVisibleButton(openTabLabel);
+  if (!openTabButton) {
+    return false;
+  }
+
+  triggerUserClick(openTabButton);
+  const menuOpened = await waitForCondition(() => {
+    const candidate = findVisibleButton(label);
+    return candidate !== null && candidate !== openTabButton;
+  });
+  if (!menuOpened) {
+    return false;
+  }
+
+  const menuButton = findVisibleButton(label);
+  if (!menuButton || menuButton === openTabButton) {
+    return false;
+  }
+
+  triggerUserClick(menuButton);
+  return waitForCondition(() => getActivePanelTab(panel) === label);
+}
+
+function getReviewPathSegments(state: PersistedReviewState): string[] {
+  const sourcePath = state.fileTreePath ?? state.fileAbsolutePath ?? "";
+  return sourcePath
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+}
+
+function getReviewPathBasename(state: PersistedReviewState): string | null {
+  return getReviewPathSegments(state).at(-1) ?? null;
+}
+
+function scoreReviewPathCandidate(candidate: string, state: PersistedReviewState): number {
+  const normalizedCandidate = candidate.toLowerCase();
+  const segments = getReviewPathSegments(state).map((segment) => segment.toLowerCase());
+  if (segments.length === 0) {
+    return 0;
+  }
+
+  let score = 0;
+  const basename = segments.at(-1);
+  if (basename && normalizedCandidate.includes(basename)) {
+    score += 100;
+  }
+
+  for (const segment of segments.slice(-4, -1)) {
+    if (normalizedCandidate.includes(segment)) {
+      score += 10;
+    }
+  }
+
+  return score;
+}
+
+function getBestMatchingReviewTreeItem(state: PersistedReviewState): HTMLButtonElement | null {
+  const root = getReviewFileTreeRoot();
+  if (!root) {
+    return null;
+  }
+
+  let bestItem: HTMLButtonElement | null = null;
+  let bestScore = 0;
+
+  for (const item of root.querySelectorAll<HTMLButtonElement>('[role="treeitem"][data-item-path]')) {
+    if (!isVisibleElement(item)) {
+      continue;
+    }
+
+    const score = scoreReviewPathCandidate(item.getAttribute("data-item-path") ?? "", state);
+    if (score > bestScore) {
+      bestItem = item;
+      bestScore = score;
+    }
+  }
+
+  return bestItem;
+}
+
+async function findReviewTreeItem(
+  state: PersistedReviewState,
+  filterInput: HTMLInputElement | HTMLTextAreaElement | null,
+): Promise<HTMLButtonElement | null> {
+  const getCandidate = () => {
+    if (state.fileTreePath) {
+      return getReviewFileTreeItemByPath(state.fileTreePath);
+    }
+    if (state.fileAbsolutePath) {
+      return getBestMatchingReviewTreeItem(state);
+    }
+    return null;
+  };
+
+  let treeItem = getCandidate();
+  if (treeItem || !filterInput) {
+    return treeItem;
+  }
+
+  const query = getReviewPathBasename(state) ?? state.fileTreePath;
+  if (!query) {
+    return null;
+  }
+
+  setTextControlValue(filterInput, query);
+  await waitForCondition(() => getCandidate() !== null, 1_500);
+  treeItem = getCandidate();
+  return treeItem;
+}
+
+async function selectVisibleMenuItem(
+  label: string,
+  options?: {
+    exact?: boolean;
+    searchTextboxLabel?: string;
+  },
+): Promise<boolean> {
+  const exact = options?.exact ?? true;
+  const searchTextboxLabel = options?.searchTextboxLabel;
+
+  if (searchTextboxLabel) {
+    const searchVisible = await waitForCondition(
+      () => findVisibleTextControl(searchTextboxLabel) !== null,
+      1_000,
+    );
+    if (searchVisible) {
+      const searchControl = findVisibleTextControl(searchTextboxLabel);
+      if (searchControl) {
+        setTextControlValue(searchControl, label);
+      }
+    }
+  }
+
+  const menuItemVisible = await waitForCondition(
+    () => findVisibleMenuItem(label, exact) !== null,
+    1_000,
+  );
+  if (!menuItemVisible) {
+    return false;
+  }
+
+  triggerUserClick(findVisibleMenuItem(label, exact));
+  return true;
+}
+
+async function setReviewFilesVisible(visible: boolean): Promise<void> {
+  if (areReviewFilesVisible() === visible) {
+    return;
+  }
+
+  triggerUserClick(getReviewToggleFilesButton());
+  await waitForCondition(() => areReviewFilesVisible() === visible, 2_000);
+}
+
+async function setReviewDiffLayout(layout: ReviewDiffLayout | null): Promise<void> {
+  if (!layout || getReviewDiffLayout() === layout) {
+    return;
+  }
+
+  triggerUserClick(getReviewDiffLayoutButton());
+  await waitForCondition(() => getReviewDiffLayout() === layout, 2_000);
+}
+
+async function restoreReviewSource(state: PersistedReviewState): Promise<void> {
+  if (!state.sourceKind) {
+    return;
+  }
+
+  const currentSourceKind = getReviewSourceKind();
+  if (currentSourceKind !== state.sourceKind) {
+    const sourceButton = getReviewSourceButton();
+    if (!sourceButton) {
+      return;
+    }
+
+    triggerUserClick(sourceButton);
+    if (state.sourceKind === "Commit" && state.refLabel) {
+      const commitMenuOpened = await selectVisibleMenuItem("Commit");
+      if (commitMenuOpened) {
+        await selectVisibleMenuItem(state.refLabel);
+        await waitForCondition(
+          () => getReviewSourceKind() === "Commit" || getReviewRefLabel() === state.refLabel,
+          2_000,
+        );
+      }
+    } else {
+      const sourceSelected = await selectVisibleMenuItem(state.sourceKind);
+      if (sourceSelected) {
+        await waitForCondition(() => getReviewSourceKind() === state.sourceKind, 2_000);
+      }
+    }
+  }
+
+  if (!state.refLabel || getReviewRefLabel() === state.refLabel) {
+    return;
+  }
+
+  const refButton = getReviewRefButton();
+  if (refButton) {
+    triggerUserClick(refButton);
+    const searchLabel = state.sourceKind === "Branch" ? "Search branches" : undefined;
+    const refSelected = await selectVisibleMenuItem(state.refLabel, {
+      searchTextboxLabel: searchLabel,
+    });
+    if (refSelected) {
+      await waitForCondition(() => getReviewRefLabel() === state.refLabel, 2_000);
+      return;
+    }
+  }
+
+  if (state.sourceKind === "Commit") {
+    triggerUserClick(getReviewSourceButton());
+    const commitMenuOpened = await selectVisibleMenuItem("Commit");
+    if (!commitMenuOpened) {
+      return;
+    }
+
+    const refSelected = await selectVisibleMenuItem(state.refLabel);
+    if (refSelected) {
+      await waitForCondition(
+        () => getReviewRefLabel() === state.refLabel || getReviewSourceKind() === "Commit",
+        2_000,
+      );
+    }
+  }
+}
+
+async function restoreReviewFileSelectionFromJumpToFile(
+  state: PersistedReviewState,
+): Promise<boolean> {
+  const jumpButton = findVisibleButton("Jump to file");
+  const query = getReviewPathBasename(state);
+  if (!jumpButton || !query) {
+    return false;
+  }
+
+  triggerUserClick(jumpButton);
+  const textboxVisible = await waitForCondition(
+    () => findVisibleTextControl("Jump to file") !== null,
+    1_000,
+  );
+  if (!textboxVisible) {
+    return false;
+  }
+
+  const textbox = findVisibleTextControl("Jump to file");
+  if (!textbox) {
+    return false;
+  }
+
+  setTextControlValue(textbox, query);
+  const menuItemsVisible = await waitForCondition(() => getVisibleMenuItems().length > 0, 1_000);
+  if (!menuItemsVisible) {
+    return false;
+  }
+
+  let bestMenuItem: HTMLElement | null = null;
+  let bestScore = 0;
+
+  for (const item of getVisibleMenuItems()) {
+    const score = scoreReviewPathCandidate(getNormalizedElementLabel(item) ?? "", state);
+    if (score > bestScore) {
+      bestMenuItem = item;
+      bestScore = score;
+    }
+  }
+
+  if (!bestMenuItem) {
+    return false;
+  }
+
+  triggerUserClick(bestMenuItem);
+  return waitForCondition(() => {
+    return (
+      (state.fileTreePath !== null && getSelectedReviewFileTreePath() === state.fileTreePath) ||
+      (state.fileAbsolutePath !== null && getReviewAbsoluteFilePath() === state.fileAbsolutePath)
+    );
+  }, 2_000);
+}
+
+async function restoreReviewFileSelection(state: PersistedReviewState): Promise<void> {
+  await waitForCondition(
+    () => getReviewFileTreeRoot() !== null || findVisibleButton("Jump to file") !== null,
+    2_000,
+  );
+
+  const alreadySelected =
+    state.fileAbsolutePath !== null
+      ? getReviewAbsoluteFilePath() === state.fileAbsolutePath
+      : state.fileTreePath !== null && getSelectedReviewFileTreePath() === state.fileTreePath;
+  if (alreadySelected) {
+    return;
+  }
+
+  if (!state.fileTreePath && !state.fileAbsolutePath) {
+    return;
+  }
+
+  const filterInput = getReviewFileFilterInput();
+  const savedFilterQuery = state.fileFilterQuery ?? "";
+  if (filterInput && filterInput.value !== savedFilterQuery) {
+    setTextControlValue(filterInput, savedFilterQuery);
+    await delay(50);
+  }
+
+  const treeItem = await findReviewTreeItem(state, filterInput);
+  if (treeItem) {
+    triggerUserClick(treeItem);
+    const selected = await waitForCondition(() => {
+      const selectedTreePath = getSelectedReviewFileTreePath();
+      const absolutePath = getReviewAbsoluteFilePath();
+      return (
+        absolutePath === state.fileAbsolutePath ||
+        (state.fileTreePath !== null &&
+          selectedTreePath === state.fileTreePath &&
+          (state.fileAbsolutePath === null || absolutePath === state.fileAbsolutePath))
+      );
+    }, 3_000);
+    if (filterInput && filterInput.value !== savedFilterQuery) {
+      setTextControlValue(filterInput, savedFilterQuery);
+    }
+    if (selected) {
+      return;
+    }
+  }
+
+  if (filterInput && filterInput.value !== savedFilterQuery) {
+    setTextControlValue(filterInput, savedFilterQuery);
+  }
+
+  await restoreReviewFileSelectionFromJumpToFile(state);
+}
+
+async function restoreElementScrollTop(
+  getElement: () => HTMLElement | null,
+  scrollTop: number | null,
+): Promise<void> {
+  if (scrollTop === null) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const element = getElement();
+    if (!element) {
+      return;
+    }
+
+    element.scrollTop = scrollTop;
+    await delay(50);
+  }
+}
+
+function isScrollPositionRestored(
+  getElement: () => HTMLElement | null,
+  expectedScrollTop: number | null,
+): boolean {
+  if (expectedScrollTop === null) {
+    return true;
+  }
+
+  const actualScrollTop = getElement()?.scrollTop;
+  return typeof actualScrollTop === "number" && Math.abs(actualScrollTop - expectedScrollTop) <= 2;
+}
+
+function needsReviewRestore(state: PersistedReviewState): boolean {
+  return (
+    (state.sourceKind !== null && getReviewSourceKind() !== state.sourceKind) ||
+    (state.refLabel !== null && getReviewRefLabel() !== state.refLabel) ||
+    (state.fileAbsolutePath !== null && getReviewAbsoluteFilePath() !== state.fileAbsolutePath) ||
+    (state.fileTreePath !== null &&
+      state.fileAbsolutePath === null &&
+      getSelectedReviewFileTreePath() !== state.fileTreePath) ||
+    areReviewFilesVisible() !== state.filesVisible ||
+    (state.diffLayout !== null && getReviewDiffLayout() !== state.diffLayout) ||
+    (state.fileExpanded !== null && isReviewFileExpanded() !== state.fileExpanded) ||
+    (state.filesVisible && (state.fileFilterQuery ?? "") !== (getReviewFileFilterQuery() ?? "")) ||
+    (state.filesVisible &&
+      !isScrollPositionRestored(getReviewFileTreeScrollContainer, state.fileTreeScrollTop)) ||
+    !isScrollPositionRestored(getReviewScrollContainer, state.reviewScrollTop)
+  );
+}
+
+async function restoreReviewStateOnce(state: PersistedReviewState): Promise<void> {
+  await waitForCondition(() => getReviewPanel() !== null, 2_000);
+  await restoreReviewSource(state);
+  await setReviewDiffLayout(state.diffLayout);
+
+  const needsTemporaryFilesPanel = !state.filesVisible && Boolean(state.fileTreePath || state.fileAbsolutePath);
+  if (state.filesVisible || needsTemporaryFilesPanel) {
+    await setReviewFilesVisible(true);
+    await waitForCondition(
+      () => getReviewFileTreeRoot() !== null || findVisibleButton("Jump to file") !== null,
+      2_000,
+    );
+    await delay(100);
+  }
+
+  await restoreReviewFileSelection(state);
+
+  if (state.fileExpanded !== null && isReviewFileExpanded() !== state.fileExpanded) {
+    triggerUserClick(getReviewFileExpandedToggle());
+    await waitForCondition(() => isReviewFileExpanded() === state.fileExpanded, 2_000);
+  }
+
+  if (state.filesVisible) {
+    const filterInput = getReviewFileFilterInput();
+    if (filterInput && filterInput.value !== (state.fileFilterQuery ?? "")) {
+      setTextControlValue(filterInput, state.fileFilterQuery ?? "");
+      await delay(50);
+    }
+    await restoreElementScrollTop(getReviewFileTreeScrollContainer, state.fileTreeScrollTop);
+  }
+
+  if (!state.filesVisible) {
+    await setReviewFilesVisible(false);
+  }
+
+  await restoreElementScrollTop(getReviewScrollContainer, state.reviewScrollTop);
+}
+
+async function restoreReviewState(state: PersistedReviewState | null): Promise<void> {
+  if (!state) {
+    return;
+  }
+
+  const reviewReady = await waitForCondition(
+    () => getActivePanelTab("right") === "Review" && getReviewPanel() !== null,
+    3_000,
+  );
+  if (!reviewReady) {
+    return;
+  }
+
+  await restoreReviewStateOnce(state);
+  if (needsReviewRestore(state)) {
+    await delay(150);
+    await restoreReviewStateOnce(state);
+  }
+
+  await restoreElementScrollTop(getReviewScrollContainer, state.reviewScrollTop);
+}
+
+async function syncSidebarOpen(desiredOpen: boolean): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (isSidebarOpen() === desiredOpen) {
+      return;
+    }
+
+    await waitForCondition(() => getSidebarToggleButton() !== null);
+    triggerUserClick(getSidebarToggleButton());
+    const synced = await waitForCondition(() => isSidebarOpen() === desiredOpen, 1_000);
+    if (synced) {
+      return;
+    }
+
+    await delay(100);
+  }
+}
+
+async function syncPanelOpen(panel: "right" | "bottom", desiredOpen: boolean): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (isPanelOpen(panel) === desiredOpen) {
+      return;
+    }
+
+    await waitForCondition(() => getPanelToggleButton(panel) !== null);
+    triggerUserClick(getPanelToggleButton(panel));
+    const synced = await waitForCondition(() => isPanelOpen(panel) === desiredOpen, 1_000);
+    if (synced) {
+      return;
+    }
+
+    await delay(100);
+  }
+}
+
+function needsUiRestore(state: PersistedUiState | null): boolean {
+  if (!state || state.pageKey !== getCurrentPageKey()) {
+    return false;
+  }
+
+  return (
+    isSidebarOpen() !== state.sidebarOpen ||
+    isPanelOpen("right") !== state.sidePanelOpen ||
+    (state.sidePanelOpen &&
+      state.sidePanelActiveTab !== null &&
+      getActivePanelTab("right") !== state.sidePanelActiveTab) ||
+    isPanelOpen("bottom") !== state.bottomPanelOpen ||
+    (state.bottomPanelOpen &&
+      state.bottomPanelActiveTab !== null &&
+      getActivePanelTab("bottom") !== state.bottomPanelActiveTab)
+  );
+}
+
+async function restoreUiState(state: PersistedUiState | null): Promise<void> {
+  if (!state || state.pageKey !== getCurrentPageKey()) {
+    return;
+  }
+
+  uiStateRestoreInProgress = true;
+  try {
+    if (isSidebarOpen() !== state.sidebarOpen) {
+      await syncSidebarOpen(state.sidebarOpen);
+    }
+
+    await syncPanelOpen("right", state.sidePanelOpen);
+    if (state.sidePanelOpen && state.sidePanelActiveTab) {
+      await restorePanelTab("right", state.sidePanelActiveTab);
+    }
+
+    await syncPanelOpen("bottom", state.bottomPanelOpen);
+    if (state.bottomPanelOpen && state.bottomPanelActiveTab) {
+      await restorePanelTab("bottom", state.bottomPanelActiveTab);
+    }
+
+    if (isSidebarOpen() !== state.sidebarOpen) {
+      await syncSidebarOpen(state.sidebarOpen);
+    }
+  } finally {
+    uiStateRestoreInProgress = false;
+  }
+
+  schedulePersistUiState();
+}
+
+function initializeUiStatePersistence(state: PersistedUiState | null): void {
+  const start = async () => {
+    let userInteracted = false;
+
+    const markUserInteraction = (event: Event) => {
+      if (event.isTrusted) {
+        userInteracted = true;
+      }
+    };
+
+    window.addEventListener("pointerdown", markUserInteraction, { capture: true });
+    window.addEventListener("keydown", markUserInteraction, { capture: true });
+    window.addEventListener("click", schedulePersistUiState, { capture: true });
+    window.addEventListener("keyup", schedulePersistUiState, { capture: true });
+    window.addEventListener("input", schedulePersistUiState, { capture: true });
+
+    await restoreUiState(state);
+    window.setTimeout(() => {
+      if (!userInteracted && needsUiRestore(state)) {
+        void restoreUiState(state);
+      }
+    }, 500);
+    ensureUiStateScrollListeners();
+
+    const observer = new MutationObserver(() => {
+      ensureUiStateScrollListeners();
+      if (!uiStateRestoreInProgress) {
+        schedulePersistUiState();
+      }
+    });
+
+    if (document.body) {
+      observer.observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["aria-label", "aria-pressed", "aria-selected", "data-state"],
+      });
+    }
+
+    schedulePersistUiState();
+  };
+
+  if (document.body) {
+    void start();
+    return;
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    void start();
+  }, { once: true });
+}
+
 const themeMediaQuery = matchMedia("(prefers-color-scheme: dark)");
 const mobileMediaQuery = matchMedia("(max-width: 768px)");
-const initialSidebarState = false;
 const electronShim = (window.__ELECTRON_SHIM__ ??= {});
 const buildFlavor: "prod" | "dev" | "agent" | string = "prod";
 
@@ -570,7 +1821,8 @@ if (initialRoute.browserPath) {
   window.history.pushState(undefined, "", initialRoute.browserPath);
 }
 
-electronShim.initialSidebarState = initialSidebarState;
+const persistedUiState = loadPersistedUiState();
+electronShim.initialSidebarState = persistedUiState?.sidebarOpen ?? false;
 electronShim.onMemoryNavigationChanged = (navigation) => {
   const path = navigation.location.pathname;
   if (path === "/" && folderToAdd && navigation.action !== "POP") {
@@ -603,6 +1855,8 @@ electronShim.onMemoryNavigationChanged = (navigation) => {
 
   updateBrowserPath(browserPath.path, navigation.action);
 };
+
+initializeUiStatePersistence(persistedUiState);
 
 export const ipcRenderer = {
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
