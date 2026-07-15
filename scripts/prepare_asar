@@ -380,4 +380,48 @@ if not patched:
     raise SystemExit("Failed to patch inlined git loggers")
 PY
 
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("scratch/asar/.vite/build/worker.js")
+source = path.read_text(errors="ignore")
+patches = [
+    (
+        "worker review summary untracked files",
+        (
+            "async function Mae({host:e,gitRoot:t,metadata:n,source:r,untrackedPathSet:i})"
+            "{return Iae({host:e,files:r5(n.files.map(e=>e.previousPath==null&&i.has(e.path)?{...e,changeKind:`untracked`}:e)),gitRoot:t,rawEntries:n.rawEntries,source:r,stats:n.stats})}"
+        ),
+        (
+            "async function Mae({host:e,gitRoot:t,metadata:n,source:r,untrackedPathSet:i})"
+            "{let a=new Set(n.files.map(e=>e.path)),o=[...i].filter(e=>!a.has(e)).map(e=>({additions:null,changeKind:`untracked`,deletions:null,path:e,previousPath:null}));"
+            "return Iae({host:e,files:r5([...n.files.map(e=>e.previousPath==null&&i.has(e.path)?{...e,changeKind:`untracked`}:e),...o]),gitRoot:t,rawEntries:n.rawEntries,source:r,stats:n.stats})}"
+        ),
+    ),
+    (
+        "worker untracked path lookup",
+        "let s=n?M2(i,r):Promise.resolve(vae(o.root));",
+        "let s=n?(r==null?v2(o.root,o.host,{signal:i.signal}):M2(i,r)):Promise.resolve(vae(o.root));",
+    ),
+    (
+        "worker untracked file count",
+        "let o=t&&r==null?await M2(n):null,",
+        "let o=t&&r==null?await v2(i.root,i.host,{signal:n.signal}):null,",
+    ),
+    (
+        "worker untracked diff loading",
+        "let p=f.untrackedDiffArgs==null?[]:d.filter(e=>f.untrackedPathSet.has(e)),m=f.untrackedDiffArgs==null?d:d.filter(e=>!f.untrackedPathSet.has(e)),[h,g]=await Promise.all([X8({binary:i,diffArgs:f.diffArgs,hideWhitespace:o,paths:m,reviewSnapshot:e}),f.untrackedDiffArgs==null?new Map:X8({binary:i,diffArgs:f.untrackedDiffArgs,hideWhitespace:o,paths:p,reviewSnapshot:e})]),_=new Map([...h,...g]);if(t===`branch`){",
+        "let p=f.untrackedDiffArgs==null?[]:d.filter(e=>f.untrackedPathSet.has(e)),m=f.untrackedDiffArgs==null?d:d.filter(e=>!f.untrackedPathSet.has(e)),[h,g]=await Promise.all([X8({binary:i,diffArgs:f.diffArgs,hideWhitespace:o,paths:m,reviewSnapshot:e}),f.untrackedDiffArgs==null?new Map:X8({binary:i,diffArgs:f.untrackedDiffArgs,hideWhitespace:o,paths:p,reviewSnapshot:e})]),_=new Map([...h,...g]),v=u.filter(e=>e.changeKind===`untracked`);for(let y of v){let b=await g2(s,y.path,y.signal);_.set(y.path,b.type===`success`?{type:`success`,diff:b.unifiedDiff,diffBytes:b.unifiedDiffBytes}:Z8(b.error))}if(t===`branch`){",
+    ),
+]
+
+for label, old, new in patches:
+    replaced = source.replace(old, new, 1)
+    if replaced == source:
+        raise SystemExit(f"Failed to patch {label}")
+    source = replaced
+
+path.write_text(source)
+PY
+
 
