@@ -987,7 +987,7 @@ function captureUiState(): PersistedUiState {
     sidePanelOpen: isPanelOpen("right"),
     bottomPanelActiveTab: getActivePanelTab("bottom"),
     bottomPanelOpen: isPanelOpen("bottom"),
-    review: null,
+    review: captureReviewState(),
   };
 }
 
@@ -1585,6 +1585,10 @@ function needsUiRestore(state: PersistedUiState | null): boolean {
     (state.sidePanelOpen &&
       state.sidePanelActiveTab !== null &&
       getActivePanelTab("right") !== state.sidePanelActiveTab) ||
+    (state.sidePanelOpen &&
+      state.sidePanelActiveTab === "Review" &&
+      state.review !== null &&
+      needsReviewRestore(state.review)) ||
     isPanelOpen("bottom") !== state.bottomPanelOpen ||
     (state.bottomPanelOpen &&
       state.bottomPanelActiveTab !== null &&
@@ -1604,8 +1608,12 @@ async function restoreUiState(state: PersistedUiState | null): Promise<void> {
     }
 
     await syncPanelOpen("right", state.sidePanelOpen);
-    if (state.sidePanelOpen && state.sidePanelActiveTab) {
-      await restorePanelTab("right", state.sidePanelActiveTab);
+    if (state.sidePanelOpen) {
+      if (state.sidePanelActiveTab) {
+        await restorePanelTab("right", state.sidePanelActiveTab);
+      }
+
+      await restoreReviewState(state.review);
     }
 
     await syncPanelOpen("bottom", state.bottomPanelOpen);
