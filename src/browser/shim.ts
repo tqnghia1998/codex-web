@@ -138,7 +138,6 @@ type ElectronShimState = {
   initialSidebarState?: boolean;
   folderFilterProjectId?: string;
   closeSidebar?: () => void;
-  setReviewBaseBranch?: (branch: string | null) => void;
   services?: {
     appInfo?: {
       get: () => Promise<ElectronAppInfo>;
@@ -214,9 +213,6 @@ const uiStateScrollTargets = new WeakSet<EventTarget>();
 
 let requestCounter = 0;
 let persistUiStateTimeoutId: number | null = null;
-let preferredReviewBaseBranch: { branch: string; pageKey: string } | null = null;
-let preferredReviewBaseBranchToken = 0;
-let preferredReviewBaseBranchInFlight = false;
 let lastPersistedUiStateJson: string | null = null;
 let uiStateRestoreInProgress = false;
 let socket: WebSocket | null = null;
@@ -623,10 +619,6 @@ function getNormalizedElementLabel(element: Element | null): string | null {
   );
 }
 
-function normalizeBranchAlias(label: string | null): string | null {
-  return normalizeUiLabel(label)?.replace(/^origin\//, "") ?? null;
-}
-
 function hasUiLabel(element: Element | null, label: string, exact = true): boolean {
   const actualLabel = getNormalizedElementLabel(element);
   const expectedLabel = normalizeUiLabel(label);
@@ -875,101 +867,6 @@ function getReviewCommitRefLabel(): string | null {
 
 function getReviewRefLabel(): string | null {
   return getReviewCommitRefLabel() ?? getNormalizedElementLabel(getReviewRefButton());
-}
-
-async function applyPreferredReviewBaseBranch(): Promise<void> {
-  const pendingBranch = preferredReviewBaseBranch;
-  const token = preferredReviewBaseBranchToken;
-  if (
-    uiStateRestoreInProgress ||
-    !pendingBranch ||
-    pendingBranch.pageKey !== getCurrentPageKey() ||
-    getActivePanelTab("right") !== "Review" ||
-    getReviewSourceKind() !== "Branch"
-  ) {
-    return;
-  }
-
-  const currentBaseBranch = getReviewRefLabel();
-  if (normalizeUiLabel(currentBaseBranch) === normalizeUiLabel(pendingBranch.branch)) {
-    if (token === preferredReviewBaseBranchToken) {
-      preferredReviewBaseBranch = null;
-    }
-    return;
-  }
-
-  const refButton = getReviewRefButton();
-  if (!refButton) {
-    return;
-  }
-
-  preferredReviewBaseBranchInFlight = true;
-  try {
-    triggerUserClick(refButton);
-    const menuReady = await waitForCondition(() => getVisibleMenuItems().length > 0, 1_000);
-    if (!menuReady || token !== preferredReviewBaseBranchToken) {
-      return;
-    }
-
-    const normalizedPreferredBranch = normalizeUiLabel(pendingBranch.branch);
-    const normalizedPreferredAlias = normalizeBranchAlias(pendingBranch.branch);
-    let preferredMenuBranch = pendingBranch.branch;
-    for (const item of getVisibleMenuItems()) {
-      const label = getNormalizedElementLabel(item);
-      if (!label) {
-        continue;
-      }
-      if (normalizeUiLabel(label) === normalizedPreferredBranch) {
-        preferredMenuBranch = label;
-        break;
-      }
-      if (
-        preferredMenuBranch === pendingBranch.branch &&
-        normalizeBranchAlias(label) === normalizedPreferredAlias
-      ) {
-        preferredMenuBranch = label;
-      }
-    }
-
-    const selected = await selectVisibleMenuItem(preferredMenuBranch, {
-      searchTextboxLabel: "Search branches",
-    });
-    if (!selected) {
-      triggerUserClick(refButton);
-      return;
-    }
-
-    if (token !== preferredReviewBaseBranchToken || getCurrentPageKey() !== pendingBranch.pageKey) {
-      return;
-    }
-
-    const applied = await waitForCondition(
-      () => normalizeUiLabel(getReviewRefLabel()) === normalizeUiLabel(preferredMenuBranch),
-      2_000,
-    );
-    if (applied && token === preferredReviewBaseBranchToken) {
-      preferredReviewBaseBranch = null;
-      schedulePersistUiState();
-    }
-  } finally {
-    preferredReviewBaseBranchInFlight = false;
-    if (token !== preferredReviewBaseBranchToken) {
-      tryApplyPreferredReviewBaseBranch();
-    }
-  }
-}
-
-function tryApplyPreferredReviewBaseBranch(): void {
-  if (uiStateRestoreInProgress || preferredReviewBaseBranchInFlight || !preferredReviewBaseBranch) {
-    return;
-  }
-
-  if (preferredReviewBaseBranch.pageKey !== getCurrentPageKey()) {
-    preferredReviewBaseBranch = null;
-    return;
-  }
-
-  void applyPreferredReviewBaseBranch();
 }
 
 function getReviewToggleFilesButton(): HTMLButtonElement | null {
@@ -1793,7 +1690,6 @@ function initializeUiStatePersistence(state: PersistedUiState | null): void {
     }
 
     schedulePersistUiState();
-    tryApplyPreferredReviewBaseBranch();
   };
 
   if (document.body) {
@@ -1824,18 +1720,6 @@ Object.assign(globalThis, {
 window.chrome ??= {};
 window.chrome.runtime ??= {};
 window.chrome.runtime.sendMessage ??= handleBrowserRuntimeMessage;
-
-electronShim.setReviewBaseBranch = (branch) => {
-  const normalizedBranch = normalizeUiLabel(branch);
-  preferredReviewBaseBranch = normalizedBranch
-    ? {
-        branch: normalizedBranch,
-        pageKey: getCurrentPageKey(),
-      }
-    : null;
-  preferredReviewBaseBranchToken += 1;
-  tryApplyPreferredReviewBaseBranch();
-};
 
 electronShim.services = {
   ...electronShim.services,
