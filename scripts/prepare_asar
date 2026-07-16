@@ -129,20 +129,29 @@ if not initial_route_patched:
 sidebar_patched = False
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    updated = source.replace(
-        "Xy=oi(br,!0)",
-        "Xy=oi(br,window.__ELECTRON_SHIM__?.initialSidebarState??!0)",
-        1,
+    if "sidebar-width" not in source or "data-app-shell-sidebar-trigger" not in source:
+        continue
+
+    marker = source.index("sidebar-width")
+    prefix, tail = source[:marker], source[marker:]
+    tail, open_count = re.subn(
+        r"_\((?P<store>[A-Za-z0-9_$]+),!0\)",
+        r"_(\g<store>,window.__ELECTRON_SHIM__?.initialSidebarState??!0)",
+        tail,
+        count=1,
     )
-    updated = updated.replace(
-        "eb=oi(br,()=>new qr(1))",
-        "eb=oi(br,()=>new qr(window.__ELECTRON_SHIM__?.initialSidebarState?1:0))",
-        1,
+    tail, spring_count = re.subn(
+        r"_\((?P<store>[A-Za-z0-9_$]+),\(\)=>new (?P<spring>[A-Za-z0-9_$]+)\(1\)\)",
+        r"_(\g<store>,()=>new \g<spring>(window.__ELECTRON_SHIM__?.initialSidebarState?1:0))",
+        tail,
+        count=1,
     )
-    if updated != source:
-        path.write_text(updated)
-        sidebar_patched = True
-        break
+    if not (open_count and spring_count):
+        continue
+
+    path.write_text(prefix + tail)
+    sidebar_patched = True
+    break
 
 if not sidebar_patched:
     raise SystemExit("Failed to patch sidebar initial state")
