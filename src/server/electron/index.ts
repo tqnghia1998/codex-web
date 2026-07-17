@@ -205,6 +205,22 @@ function createIpcMainEvent(ports: StubMessagePort[] = []): IpcMainEvent {
   return event;
 }
 
+const IPC_HANDLER_WAIT_TIMEOUT_MS = 15_000;
+const IPC_HANDLER_POLL_INTERVAL_MS = 25;
+
+async function waitForHandler(
+  handlers: Map<string, (event: unknown, ...args: unknown[]) => unknown>,
+  channel: string,
+): Promise<((event: unknown, ...args: unknown[]) => unknown) | undefined> {
+  const deadline = Date.now() + IPC_HANDLER_WAIT_TIMEOUT_MS;
+  while (!handlers.has(channel) && Date.now() < deadline) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, IPC_HANDLER_POLL_INTERVAL_MS),
+    );
+  }
+  return handlers.get(channel);
+}
+
 function createIpcMainStub(): {
   handle: (
     channel: string,
@@ -213,8 +229,7 @@ function createIpcMainStub(): {
   off: (event: string, listener: StubListener) => unknown;
   on: (event: string, listener: StubListener) => unknown;
   removeHandler: (channel: string) => void;
-} {
-  const emitter = createEmitterStub("ipcMain");
+} {  const emitter = createEmitterStub("ipcMain");
   const handlers = new Map<
     string,
     (event: unknown, ...args: unknown[]) => unknown
@@ -245,7 +260,12 @@ function createIpcMainStub(): {
     channel: string,
     args: unknown[],
   ): Promise<unknown> => {
-    const handler = handlers.get(channel);
+    // The upstream main bundle registers its ipcMain.handle channels as part
+    // of its own async boot sequence (runMainAppStartup), which is kicked
+    // off after this server already accepts connections. A renderer can
+    // invoke a channel before its handler is registered, so wait briefly
+    // instead of failing the race immediately.
+    const handler = await waitForHandler(handlers, channel);
     if (!handler) {
       throw new Error(`[electron-main-stub] No ipcMain.handle for ${channel}`);
     }

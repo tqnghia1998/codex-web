@@ -354,13 +354,15 @@ function ensureElectronLikeProcessContext(): void {
 
   // Upstream resolves its internal "build flavor" from BUILD_FLAVOR, then
   // package metadata, then falls back to Dev unless NODE_ENV=production.
-  // Packaged Electron apps always run with NODE_ENV=production; our plain
-  // node process does not. Left as Dev, upstream treats the build as
-  // internal and requires a bundled Git toolchain that isn't part of this
-  // install, so match packaged-app behavior here.
+  // Packaged Electron apps always run with NODE_ENV=production. This process
+  // is often spawned as a child of some other dev tooling (e.g. embedding
+  // hosts) that already sets NODE_ENV=development in the environment we
+  // inherit, so force it rather than only defaulting it — otherwise upstream
+  // resolves Dev, treats the build as internal, and requires a bundled Git
+  // toolchain that isn't part of this install.
   // ponytail: env-only nudge, revisit if upstream ever reads more than
   // NODE_ENV/BUILD_FLAVOR to pick the build flavor.
-  process.env.NODE_ENV ??= "production";
+  process.env.NODE_ENV = "production";
 }
 
 async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
@@ -732,7 +734,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
   }
 
   const module = require(path.join(buildDirectory, matches[0]!));
-  module.runMainAppStartup();
+  module.runMainAppStartup().catch((error: unknown) => {
+    console.error("[main-app-startup] runMainAppStartup failed", error);
+  });
 }
 
 async function main(args: string[]) {
