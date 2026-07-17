@@ -155,18 +155,82 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
 
 if not sidebar_patched:
     raise SystemExit("Failed to patch sidebar initial state")
+PY
 
+# The upgraded bundle centralized local-project resolution for thread
+# creation into a single shared function that does a strict lookup in the
+# LOCAL_PROJECTS catalog and throws "Unknown local project" on a miss. Our
+# browser-mode `?folder=` flow feeds a raw filesystem path as projectId
+# without ever registering it as a catalog entry, so this now fails where
+# packaged Electron always goes through the "add project" UI first. Treat an
+# unrecognized absolute-path projectId as a raw workspace root instead of a
+# catalog miss, mirroring what packaged desktop's project picker would do.
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+pattern = re.compile(
+    r"async function ([A-Za-z0-9_$]+)\(\{projectId:([A-Za-z0-9_$]+),prompt:([A-Za-z0-9_$]+)\}\)"
+    r"\{let\{value:([A-Za-z0-9_$]+)\}=await ([A-Za-z0-9_$]+)\(`get-global-state`,\{params:\{key:([A-Za-z0-9_$.]+)\}\}\),"
+    r"([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\4\)\[\2\];if\(\7==null\)return null;"
+)
+patched = False
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    source, count = re.subn(
-        r"ge=x\?null:O\?\?Te\(`~`\)",
-        "ge=x?null:P?.hostId==null&&P?.projectId!=null?P.projectId:O??Te(`~`)",
+    source, count = pattern.subn(
+        lambda match: (
+            f"async function {match.group(1)}({{projectId:{match.group(2)},prompt:{match.group(3)}}}){{"
+            f"let{{value:{match.group(4)}}}=await {match.group(5)}(`get-global-state`,{{params:{{key:{match.group(6)}}}}}),"
+            f"{match.group(7)}={match.group(8)}({match.group(4)})[{match.group(2)}];"
+            f"if({match.group(7)}==null){{if(!{match.group(2)}.startsWith(`/`))return null;{match.group(7)}={{rootPaths:[{match.group(2)}]}}}}"
+        ),
         source,
         count=1,
     )
     if count:
         path.write_text(source)
+        patched = True
+        break
 
+if not patched:
+    raise SystemExit("Failed to patch local project resolution fallback")
+PY
+
+# electronShim.services (browser mode) is a stub and lacks several services
+# real desktop gets over the app-host MessageChannel bridge, which doesn't
+# work in a plain browser tab. "threadProjectAssignments" is one of them, so
+# saving a thread's project assignment threw instead of persisting. The
+# bundle already ships a self-contained fallback (mY, exported as xn) that
+# does the same persistence via the plain get/set-global-state RPC our
+# local-project fallback above already relies on — just wire it in when the
+# service object is missing instead of throwing.
+python3 - <<'PY'
+from pathlib import Path
+
+needle = (
+    "saveThreadProjectAssignment:async t=>{let n=K.threadProjectAssignments;"
+    "if(n==null)throw Error(`Thread project assignment service is unavailable`);"
+    "await n.setAssignment(t),e!=null&&await tn(e,t)}"
+)
+replacement = (
+    "saveThreadProjectAssignment:async t=>{let n=K.threadProjectAssignments;"
+    "await(n==null?mY(e,t):n.setAssignment(t)),e!=null&&await tn(e,t)}"
+)
+matches = []
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    count = source.count(needle)
+    if count:
+        matches.append((path, source, count))
+
+match_count = sum(count for _, _, count in matches)
+if match_count != 1:
+    raise SystemExit(
+        f"Failed to patch thread project assignment fallback: expected 1 match, found {match_count}"
+    )
+
+path, source, _ = matches[0]
+path.write_text(source.replace(needle, replacement, 1))
 PY
 
 python3 - <<'PY'
