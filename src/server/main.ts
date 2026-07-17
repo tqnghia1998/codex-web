@@ -351,6 +351,16 @@ function ensureElectronLikeProcessContext(): void {
   };
   processWithElectronFields.resourcesPath ??= asarRoot;
   processWithElectronFields.type ??= "browser";
+
+  // Upstream resolves its internal "build flavor" from BUILD_FLAVOR, then
+  // package metadata, then falls back to Dev unless NODE_ENV=production.
+  // Packaged Electron apps always run with NODE_ENV=production; our plain
+  // node process does not. Left as Dev, upstream treats the build as
+  // internal and requires a bundled Git toolchain that isn't part of this
+  // install, so match packaged-app behavior here.
+  // ponytail: env-only nudge, revisit if upstream ever reads more than
+  // NODE_ENV/BUILD_FLAVOR to pick the build flavor.
+  process.env.NODE_ENV ??= "production";
 }
 
 async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
