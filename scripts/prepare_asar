@@ -135,14 +135,14 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
     marker = source.index("sidebar-width")
     prefix, tail = source[:marker], source[marker:]
     tail, open_count = re.subn(
-        r"_\((?P<store>[A-Za-z0-9_$]+),!0\)",
-        r"_(\g<store>,window.__ELECTRON_SHIM__?.initialSidebarState??!0)",
+        r"(?P<store>R)=d\(f,!0\)",
+        r"\g<store>=d(f,window.__ELECTRON_SHIM__?.initialSidebarState??!0)",
         tail,
         count=1,
     )
     tail, spring_count = re.subn(
-        r"_\((?P<store>[A-Za-z0-9_$]+),\(\)=>new (?P<spring>[A-Za-z0-9_$]+)\(1\)\)",
-        r"_(\g<store>,()=>new \g<spring>(window.__ELECTRON_SHIM__?.initialSidebarState?1:0))",
+        r"(?P<store>H)=d\(f,\(\)=>new (?P<spring>h)\(1\)\)",
+        r"\g<store>=d(f,()=>new \g<spring>(window.__ELECTRON_SHIM__?.initialSidebarState?1:0))",
         tail,
         count=1,
     )
@@ -175,20 +175,17 @@ from pathlib import Path
 
 patched = False
 pattern = re.compile(
-    r"async function ([A-Za-z0-9_$]+)\(\)\{([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\),([A-Za-z0-9_$]+)=await \2\.services,\4\.devboxService\}",
+    r"async function ([A-Za-z0-9_$]+)\(\)\{([A-Za-z0-9_$]+)=([A-Za-z0-9_$]+)\(\),([A-Za-z0-9_$]+)=await \2\.services,"
 )
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
     source, count = pattern.subn(
         lambda match: (
             f"async function {match.group(1)}(){{"
-            f"if(window.__ELECTRON_SHIM__?.services!=null){{"
-            f"{match.group(2)}={{services:Promise.resolve(window.__ELECTRON_SHIM__.services)}},"
-            f"{match.group(4)}=window.__ELECTRON_SHIM__.services,"
-            f"{match.group(4)}.devboxService;return}}"
-            f"{match.group(2)}={match.group(3)}(),"
+            f"if(window.__ELECTRON_SHIM__?.services!=null)"
+            f"{{{match.group(2)}={{services:Promise.resolve(window.__ELECTRON_SHIM__.services)}},{match.group(4)}=window.__ELECTRON_SHIM__.services}}"
+            f"else {match.group(2)}={match.group(3)}(),"
             f"{match.group(4)}=await {match.group(2)}.services,"
-            f"{match.group(4)}.devboxService}}"
         ),
         source,
         count=1,
@@ -325,8 +322,15 @@ from pathlib import Path
 path = Path(sys.argv[1])
 source = path.read_text()
 source, count = re.subn(
-    r"(return GB\(\{)(dsn:)", r"\1enabled:!1,\2", source, count=1
+    r"function ([A-Za-z0-9_$]+)\(([^)]*)\)\{if\([^)]*\.app\.isReady\(\)\)throw Error\(`Sentry SDK should be initialized before the Electron app 'ready' event is fired`\);let [^;]+;",
+    lambda match: f"function {match.group(1)}({match.group(2)}){{return;",
+    source,
+    count=1,
 )
+if not count:
+    source, count = re.subn(
+        r"(return GB\(\{)(dsn:)", r"\1enabled:!1,\2", source, count=1
+    )
 if count:
     path.write_text(source)
 PY
@@ -397,30 +401,8 @@ source = path.read_text(errors="ignore")
 patches = [
     (
         "worker review summary untracked files",
-        (
-            "async function Mae({host:e,gitRoot:t,metadata:n,source:r,untrackedPathSet:i})"
-            "{return Iae({host:e,files:r5(n.files.map(e=>e.previousPath==null&&i.has(e.path)?{...e,changeKind:`untracked`}:e)),gitRoot:t,rawEntries:n.rawEntries,source:r,stats:n.stats})}"
-        ),
-        (
-            "async function Mae({host:e,gitRoot:t,metadata:n,source:r,untrackedPathSet:i})"
-            "{let a=new Set(n.files.map(e=>e.path)),o=[...i].filter(e=>!a.has(e)).map(e=>({additions:null,changeKind:`untracked`,deletions:null,path:e,previousPath:null}));"
-            "return Iae({host:e,files:r5([...n.files.map(e=>e.previousPath==null&&i.has(e.path)?{...e,changeKind:`untracked`}:e),...o]),gitRoot:t,rawEntries:n.rawEntries,source:r,stats:n.stats})}"
-        ),
-    ),
-    (
-        "worker untracked path lookup",
-        "let s=n?M2(i,r):Promise.resolve(vae(o.root));",
-        "let s=n?(r==null?v2(o.root,o.host,{signal:i.signal}):M2(i,r)):Promise.resolve(vae(o.root));",
-    ),
-    (
-        "worker untracked file count",
-        "let o=t&&r==null?await M2(n):null,",
-        "let o=t&&r==null?await v2(i.root,i.host,{signal:n.signal}):null,",
-    ),
-    (
-        "worker untracked diff loading",
-        "let p=f.untrackedDiffArgs==null?[]:d.filter(e=>f.untrackedPathSet.has(e)),m=f.untrackedDiffArgs==null?d:d.filter(e=>!f.untrackedPathSet.has(e)),[h,g]=await Promise.all([X8({binary:i,diffArgs:f.diffArgs,hideWhitespace:o,paths:m,reviewSnapshot:e}),f.untrackedDiffArgs==null?new Map:X8({binary:i,diffArgs:f.untrackedDiffArgs,hideWhitespace:o,paths:p,reviewSnapshot:e})]),_=new Map([...h,...g]);if(t===`branch`){",
-        "let p=f.untrackedDiffArgs==null?[]:d.filter(e=>f.untrackedPathSet.has(e)),m=f.untrackedDiffArgs==null?d:d.filter(e=>!f.untrackedPathSet.has(e)),[h,g]=await Promise.all([X8({binary:i,diffArgs:f.diffArgs,hideWhitespace:o,paths:m,reviewSnapshot:e}),f.untrackedDiffArgs==null?new Map:X8({binary:i,diffArgs:f.untrackedDiffArgs,hideWhitespace:o,paths:p,reviewSnapshot:e})]),_=new Map([...h,...g]),v=u.filter(e=>e.changeKind===`untracked`);for(let y of v){let b=await g2(s,y.path,y.signal);_.set(y.path,b.type===`success`?{type:`success`,diff:b.unifiedDiff,diffBytes:b.unifiedDiffBytes}:Z8(b.error))}if(t===`branch`){",
+        "async function Voe({host:e,gitRoot:t,metadata:n,reviewSnapshot:r,source:i,untrackedPathSet:a}){let o=Y8(n.files.map(e=>e.previousPath==null&&a.has(e.path)?{...e,changeKind:`untracked`}:e)),s=await B8(r,n.rawEntries.filter(e=>e.status!==`D`&&/^0+$/.test(e.newOid)).map(e=>e.path));return s==null?null:(await Woe({host:e,files:o,gitRoot:t,rawEntries:n.rawEntries.map(e=>({...e,newOid:s.get(e.path)?.oid??e.newOid})),source:i,stats:n.stats})).sort((e,t)=>e.path.localeCompare(t.path))}",
+        "async function Voe({host:e,gitRoot:t,metadata:n,reviewSnapshot:r,source:i,untrackedPathSet:a}){let o=new Set(n.files.map(e=>e.path)),s=[...a].filter(e=>!o.has(e)).map(e=>({additions:null,changeKind:`untracked`,deletions:null,path:e,previousPath:null})),c=Y8([...n.files.map(e=>e.previousPath==null&&a.has(e.path)?{...e,changeKind:`untracked`}:e),...s]);return s=await B8(r,n.rawEntries.filter(e=>e.status!==`D`&&/^0+$/.test(e.newOid)).map(e=>e.path)),s==null?null:(await Woe({host:e,files:c,gitRoot:t,rawEntries:n.rawEntries.map(e=>({...e,newOid:s.get(e.path)?.oid??e.newOid})),source:i,stats:n.stats})).sort((e,t)=>e.path.localeCompare(t.path))}",
     ),
 ]
 
