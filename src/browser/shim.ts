@@ -376,7 +376,24 @@ function nextRequestId(): string {
 function invokeMain(channel: string, args: unknown[]): Promise<unknown> {
   const requestId = nextRequestId();
   return new Promise((resolve, reject) => {
-    pendingInvokes.set(requestId, { resolve, reject });
+    const timeoutId = window.setTimeout(() => {
+      if (!pendingInvokes.delete(requestId)) {
+        return;
+      }
+      reject(timeoutError(`ipc invoke response for ${channel}`));
+    }, REQUEST_TIMEOUT_MS);
+
+    pendingInvokes.set(requestId, {
+      resolve: (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      reject: (reason) => {
+        window.clearTimeout(timeoutId);
+        reject(reason);
+      },
+    });
+
     enqueueMessage({
       type: "ipc-renderer-invoke",
       clientId,

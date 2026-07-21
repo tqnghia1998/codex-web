@@ -494,11 +494,16 @@ if not m:
     raise SystemExit("Failed to patch worker review summary untracked files")
 
 g = m.groupdict()
+# ponytail: reuse a guaranteed-fresh identifier for the missing-untracked list
+# so we don't redeclare the `untrackedPathSet` param (a SyntaxError).
+# The original `let o=DEDUP(...)` becomes: build a Set of known paths,
+# compute missing untracked entries, then reassign o = DEDUP(extended list).
+extra = "__cw_untracked"
 new = (
     f"async function {g['fn']}({{host:{g['h']},gitRoot:{g['g']},metadata:{g['m']},reviewSnapshot:{g['r']},source:{g['s']},untrackedPathSet:{g['u']}}}){{"
-    f"let {g['o']}=new Set({g['m']}.files.map({g['farg']}=>{g['farg']}.path)),"
-    f"{g['u']}=[...{g['u']}].filter({g['farg']}=>!{g['o']}.has({g['farg']})).map({g['farg']}=>({{additions:null,changeKind:`untracked`,deletions:null,path:{g['farg']},previousPath:null}})),"
-    f"{g['o']}={g['dedup']}([...{g['m']}.files.map({g['farg']}=>{g['farg']}.previousPath==null&&{g['u']}.has({g['farg']}.path)?{{...{g['farg']},changeKind:`untracked`}}:{g['farg']}),...{g['u']}]),"
+    f"let {g['o']}=new Set({g['m']}.files.map({g['farg']}=>{g['farg']}.path));"
+    f"let {extra}=[...{g['u']}].filter({g['farg']}=>!{g['o']}.has({g['farg']})).map({g['farg']}=>({{additions:null,changeKind:`untracked`,deletions:null,path:{g['farg']},previousPath:null}}));"
+    f"{g['o']}={g['dedup']}([...{g['m']}.files.map({g['farg']}=>{g['farg']}.previousPath==null&&{g['u']}.has({g['farg']}.path)?{{...{g['farg']},changeKind:`untracked`}}:{g['farg']}),...{extra}]);"
 )
 path.write_text(source[:m.start()] + new + source[m.end():])
 PY
