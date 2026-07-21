@@ -205,32 +205,45 @@ PY
 # local-project fallback above already relies on — just wire it in when the
 # service object is missing instead of throwing.
 python3 - <<'PY'
+import re
 from pathlib import Path
 
-needle = (
-    "saveThreadProjectAssignment:async t=>{let n=K.threadProjectAssignments;"
-    "if(n==null)throw Error(`Thread project assignment service is unavailable`);"
-    "await n.setAssignment(t),e!=null&&await tn(e,t)}"
-)
-replacement = (
-    "saveThreadProjectAssignment:async t=>{let n=K.threadProjectAssignments;"
-    "await(n==null?mY(e,t):n.setAssignment(t)),e!=null&&await tn(e,t)}"
+# Match `saveThreadProjectAssignment:async <arg>=>{let <svc>=<holder>.threadProjectAssignments;
+# if(<svc>==null)throw Error(`Thread project assignment service is unavailable`);
+# await <svc>.setAssignment(<arg>),<scope>!=null&&await <persist>(<scope>,<arg>)}`
+# Capturing the drift-prone minified names so the rewrite survives upstream renames.
+# The self-contained fallback `mY` (exported as `xn`) lives in the same bundle and
+# persists the assignment via get/set-global-state when the injected service is
+# missing — which is always the case in browser mode where electronShim.services
+# is a stub. Without this, saving a thread's project assignment throws.
+pattern = re.compile(
+    r"saveThreadProjectAssignment:async (?P<arg>[A-Za-z0-9_$]+)=>\{"
+    r"let (?P<svc>[A-Za-z0-9_$]+)=(?P<holder>[A-Za-z0-9_$]+)\.threadProjectAssignments;"
+    r"if\((?P=svc)==null\)throw Error\(`Thread project assignment service is unavailable`\);"
+    r"await (?P=svc)\.setAssignment\((?P=arg)\),"
+    r"(?P<scope>[A-Za-z0-9_$]+)!=null&&await (?P<persist>[A-Za-z0-9_$]+)\((?P=scope),(?P=arg)\)\}"
 )
 matches = []
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
     source = path.read_text(errors="ignore")
-    count = source.count(needle)
-    if count:
-        matches.append((path, source, count))
+    found = pattern.findall(source)
+    if found:
+        matches.append((path, source, found))
 
-match_count = sum(count for _, _, count in matches)
+match_count = sum(len(found) for _, _, found in matches)
 if match_count != 1:
     raise SystemExit(
         f"Failed to patch thread project assignment fallback: expected 1 match, found {match_count}"
     )
 
-path, source, _ = matches[0]
-path.write_text(source.replace(needle, replacement, 1))
+path, source, found = matches[0]
+arg, svc, holder, scope, persist = found[0]
+replacement = (
+    f"saveThreadProjectAssignment:async {arg}=>{{let {svc}={holder}.threadProjectAssignments;"
+    f"await({svc}==null?mY({scope},{arg}):{svc}.setAssignment({arg})),"
+    f"{scope}!=null&&await {persist}({scope},{arg})}}"
+)
+path.write_text(pattern.sub(replacement, source, count=1))
 PY
 
 python3 - <<'PY'
@@ -458,25 +471,34 @@ if not patched:
 PY
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
+# `reviewSnapshot` for untracked files used to drop any untracked path that
+# wasn't already in `metadata.files`. The upstream function only relabels
+# existing entries as `untracked`; it never injects untracked paths that are
+# absent from the review metadata. We extend the file list with the missing
+# untracked paths so the summary actually reflects them. Match only the
+# function head + the first `let <o>=<dedup>(<m>.files.map(...))` expression
+# (stable anchors, drift-tolerant captures) and leave the rest of the body
+# untouched.
 path = Path("scratch/asar/.vite/build/worker.js")
 source = path.read_text(errors="ignore")
-patches = [
-    (
-        "worker review summary untracked files",
-        "async function Voe({host:e,gitRoot:t,metadata:n,reviewSnapshot:r,source:i,untrackedPathSet:a}){let o=Y8(n.files.map(e=>e.previousPath==null&&a.has(e.path)?{...e,changeKind:`untracked`}:e)),s=await B8(r,n.rawEntries.filter(e=>e.status!==`D`&&/^0+$/.test(e.newOid)).map(e=>e.path));return s==null?null:(await Woe({host:e,files:o,gitRoot:t,rawEntries:n.rawEntries.map(e=>({...e,newOid:s.get(e.path)?.oid??e.newOid})),source:i,stats:n.stats})).sort((e,t)=>e.path.localeCompare(t.path))}",
-        "async function Voe({host:e,gitRoot:t,metadata:n,reviewSnapshot:r,source:i,untrackedPathSet:a}){let o=new Set(n.files.map(e=>e.path)),s=[...a].filter(e=>!o.has(e)).map(e=>({additions:null,changeKind:`untracked`,deletions:null,path:e,previousPath:null})),c=Y8([...n.files.map(e=>e.previousPath==null&&a.has(e.path)?{...e,changeKind:`untracked`}:e),...s]);return s=await B8(r,n.rawEntries.filter(e=>e.status!==`D`&&/^0+$/.test(e.newOid)).map(e=>e.path)),s==null?null:(await Woe({host:e,files:c,gitRoot:t,rawEntries:n.rawEntries.map(e=>({...e,newOid:s.get(e.path)?.oid??e.newOid})),source:i,stats:n.stats})).sort((e,t)=>e.path.localeCompare(t.path))}",
-    ),
-]
 
-for label, old, new in patches:
-    replaced = source.replace(old, new, 1)
-    if replaced == source:
-        raise SystemExit(f"Failed to patch {label}")
-    source = replaced
+sig = re.compile(
+    r"async function (?P<fn>[A-Za-z0-9_$]+)\(\{host:(?P<h>[A-Za-z0-9_$]+),gitRoot:(?P<g>[A-Za-z0-9_$]+),metadata:(?P<m>[A-Za-z0-9_$]+),reviewSnapshot:(?P<r>[A-Za-z0-9_$]+),source:(?P<s>[A-Za-z0-9_$]+),untrackedPathSet:(?P<u>[A-Za-z0-9_$]+)\}\)\{"
+    r"let (?P<o>[A-Za-z0-9_$]+)=(?P<dedup>[A-Za-z0-9_$]+)\((?P=m)\.files\.map\((?P<farg>[A-Za-z0-9_$]+)=>(?P=farg)\.previousPath==null&&(?P=u)\.has\((?P=farg)\.path\)\?\{\.\.\.(?P=farg),changeKind:`untracked`\}:(?P=farg)\)\),"
+)
+m = sig.search(source)
+if not m:
+    raise SystemExit("Failed to patch worker review summary untracked files")
 
-path.write_text(source)
+g = m.groupdict()
+new = (
+    f"async function {g['fn']}({{host:{g['h']},gitRoot:{g['g']},metadata:{g['m']},reviewSnapshot:{g['r']},source:{g['s']},untrackedPathSet:{g['u']}}}){{"
+    f"let {g['o']}=new Set({g['m']}.files.map({g['farg']}=>{g['farg']}.path)),"
+    f"{g['u']}=[...{g['u']}].filter({g['farg']}=>!{g['o']}.has({g['farg']})).map({g['farg']}=>({{additions:null,changeKind:`untracked`,deletions:null,path:{g['farg']},previousPath:null}})),"
+    f"{g['o']}={g['dedup']}([...{g['m']}.files.map({g['farg']}=>{g['farg']}.previousPath==null&&{g['u']}.has({g['farg']}.path)?{{...{g['farg']},changeKind:`untracked`}}:{g['farg']}),...{g['u']}]),"
+)
+path.write_text(source[:m.start()] + new + source[m.end():])
 PY
-
-
