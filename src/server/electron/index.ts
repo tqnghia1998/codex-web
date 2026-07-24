@@ -41,6 +41,11 @@ type IpcMainBridgeState = {
     channel: string,
     args: unknown[],
   ) => Promise<unknown>;
+  handleRendererPostMessage?: (
+    channel: string,
+    message: unknown,
+    ports: StubMessagePort[],
+  ) => void;
   handleRendererSend?: (channel: string, args: unknown[]) => void;
 };
 
@@ -887,15 +892,6 @@ const protocol = {
   },
 };
 function createSessionStub(label: string): {
-  cookies: {
-    get: (...args: unknown[]) => Promise<unknown[]>;
-    off: (event: string, listener: StubListener) => unknown;
-    on: (event: string, listener: StubListener) => unknown;
-    once: (event: string, listener: StubListener) => unknown;
-    remove: (...args: unknown[]) => Promise<void>;
-    removeListener: (event: string, listener: StubListener) => unknown;
-    set: (...args: unknown[]) => Promise<void>;
-  };
   getUserAgent: () => string;
   loadExtension: (extensionPath: string) => Promise<{
     id: string;
@@ -921,22 +917,6 @@ function createSessionStub(label: string): {
   const emitter = createEmitterStub(label);
   const cookies = createEmitterStub(`${label}.cookies`);
   return {
-    cookies: {
-      async get(...args: unknown[]): Promise<unknown[]> {
-        log(`${label}.cookies.get`, args);
-        return [];
-      },
-      off: cookies.off,
-      on: cookies.on,
-      once: cookies.once,
-      async remove(...args: unknown[]): Promise<void> {
-        log(`${label}.cookies.remove`, args);
-      },
-      removeListener: cookies.removeListener,
-      async set(...args: unknown[]): Promise<void> {
-        log(`${label}.cookies.set`, args);
-      },
-    },
     async loadExtension(extensionPath: string): Promise<{
       id: string;
       name: string;

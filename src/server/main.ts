@@ -171,6 +171,91 @@ type StagedUpload = {
   uploadedPath: string;
 };
 
+type MessagePortListener = (...args: unknown[]) => void;
+
+type BridgedMessagePort = {
+  close: () => void;
+  on: (event: string, listener: MessagePortListener) => unknown;
+  postMessage: (message: unknown) => void;
+  start: () => void;
+};
+
+class WebSocketMessagePort implements BridgedMessagePort {
+  private closed = false;
+  private readonly listeners = new Map<string, Set<MessagePortListener>>();
+
+  constructor(
+    private readonly portId: string,
+    private readonly sendToRenderer: (message: MainToRendererMessage) => void,
+    private readonly onClosed: () => void,
+  ) {}
+
+  on(event: string, listener: MessagePortListener): this {
+    const listeners = this.listeners.get(event) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(event, listeners);
+
+    return this;
+  }
+
+  postMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-message",
+      portId: this.portId,
+      data,
+    });
+  }
+
+  start(): void {}
+
+  close(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.sendToRenderer({
+      type: "message-port-close",
+      portId: this.portId,
+    });
+  }
+
+  receiveMessage(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const listeners = this.listeners.get("message");
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener({ data });
+    }
+  }
+
+  disconnect(): void {
+    if (!this.markClosed()) {
+      return;
+    }
+    this.emit("close");
+  }
+
+  private emit(event: string, ...args: unknown[]): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(...args);
+    }
+  }
+
+  private markClosed(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    this.closed = true;
+    this.onClosed();
+    return true;
+  }
+}
 
 function workspaceDirectoryEntryTypeRank(
   entry: WorkspaceDirectoryEntry,
@@ -602,7 +687,9 @@ async function startIpcBridgeServer(options: ServerOptions): Promise<void> {
         return;
       }
 
-      clientSockets.set(message.clientId, socket);
+      if ("clientId" in message && message.clientId) {
+        clientSockets.set(message.clientId, socket);
+      }
 
       if (message.type === "ipc-renderer-send") {
         bridgeState.handleRendererSend?.(message.channel, message.args);

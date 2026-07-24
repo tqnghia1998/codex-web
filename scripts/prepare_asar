@@ -199,6 +199,62 @@ if not patched:
     raise SystemExit("Failed to patch local project resolution fallback")
 PY
 
+# electronShim.services (browser mode) is a stub and lacks several services
+# real desktop gets over the app-host MessageChannel bridge, which doesn't
+# work in a plain browser tab. "threadProjectAssignments" is one of them, so
+# saving a thread's project assignment threw instead of persisting. The
+# bundle already ships a self-contained fallback (zer) that
+# does the same persistence via the plain get/set-global-state RPC our
+# local-project fallback above already relies on — just wire it in when the
+# service object is missing instead of throwing.
+python3 - <<'PY'
+import re
+from pathlib import Path
+
+fallback_pattern = re.compile(
+    r"function (?P<name>[A-Za-z0-9_$]+)\([^)]*\)\{"
+    r"(?:(?!function ).){0,4000}?Fl\.THREAD_PROJECT_ASSIGNMENTS"
+    r"(?:(?!function ).){0,4000}?Fl\.PROJECTLESS_THREAD_IDS"
+    r"(?:(?!function ).){0,4000}?Failed to save or restore thread project membership",
+    re.DOTALL,
+)
+pattern = re.compile(
+    r"saveThreadProjectAssignment:async (?P<arg>[A-Za-z0-9_$]+)=>\{"
+    r"let (?P<svc>[A-Za-z0-9_$]+)=(?P<holder>[A-Za-z0-9_$]+)\.threadProjectAssignments;"
+    r"if\((?P=svc)==null\)throw Error\(`Thread project assignment service is unavailable`\);"
+    r"await (?P=svc)\.setAssignment\((?P=arg)\),"
+    r"(?P<scope>[A-Za-z0-9_$]+)!=null&&await (?P<persist>[A-Za-z0-9_$]+)\((?P=scope),(?P=arg)\)\}"
+)
+matches = []
+for path in Path("scratch/asar/webview/assets").glob("*.js"):
+    source = path.read_text(errors="ignore")
+    found = pattern.findall(source)
+    if found:
+        matches.append((path, source, found))
+
+match_count = sum(len(found) for _, _, found in matches)
+if match_count != 1:
+    raise SystemExit(
+        f"Failed to patch thread project assignment fallback: expected 1 match, found {match_count}"
+    )
+
+path, source, found = matches[0]
+arg, svc, holder, scope, persist = found[0]
+fallback_matches = fallback_pattern.findall(source)
+if len(fallback_matches) != 1:
+    raise SystemExit(
+        "Failed to find thread project assignment fallback: "
+        f"expected 1 match, found {len(fallback_matches)}"
+    )
+fallback = fallback_matches[0]
+replacement = (
+    f"saveThreadProjectAssignment:async {arg}=>{{let {svc}={holder}.threadProjectAssignments;"
+    f"await({svc}==null?{fallback}({scope},{arg}):{svc}.setAssignment({arg})),"
+    f"{scope}!=null&&await {persist}({scope},{arg})}}"
+)
+path.write_text(pattern.sub(replacement, source, count=1))
+PY
+
 
 
 python3 - <<'PY'
