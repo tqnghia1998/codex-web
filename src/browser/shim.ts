@@ -2020,6 +2020,15 @@ export const ipcRenderer = {
       return themeMediaQuery.matches ? "dark" : "light";
     }
 
+    // Browser mode has no desktop startup snapshot or native file-drag bridge.
+    if (channel === "codex_desktop:get-initial-sidebar-bootstrap") {
+      return null;
+    }
+
+    if (channel === "codex_desktop:start-file-drag") {
+      return false;
+    }
+
     return unimplemented("ipcRenderer.sendSync");
   },
 };
