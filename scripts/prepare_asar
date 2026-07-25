@@ -213,8 +213,8 @@ from pathlib import Path
 
 fallback_pattern = re.compile(
     r"function (?P<name>[A-Za-z0-9_$]+)\([^)]*\)\{"
-    r"(?:(?!function ).){0,4000}?Fl\.THREAD_PROJECT_ASSIGNMENTS"
-    r"(?:(?!function ).){0,4000}?Fl\.PROJECTLESS_THREAD_IDS"
+    r"(?:(?!function ).){0,4000}?[A-Za-z0-9_$]+\.THREAD_PROJECT_ASSIGNMENTS"
+    r"(?:(?!function ).){0,4000}?[A-Za-z0-9_$]+\.PROJECTLESS_THREAD_IDS"
     r"(?:(?!function ).){0,4000}?Failed to save or restore thread project membership",
     re.DOTALL,
 )
