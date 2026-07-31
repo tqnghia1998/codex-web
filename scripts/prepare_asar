@@ -223,7 +223,7 @@ pattern = re.compile(
     r"let (?P<svc>[A-Za-z0-9_$]+)=(?P<holder>[A-Za-z0-9_$]+)\.threadProjectAssignments;"
     r"if\((?P=svc)==null\)throw Error\(`Thread project assignment service is unavailable`\);"
     r"await (?P=svc)\.setAssignment\((?P=arg)\),"
-    r"(?P<scope>[A-Za-z0-9_$]+)!=null&&await (?P<persist>[A-Za-z0-9_$]+)\((?P=scope),(?P=arg)\)\}"
+    r"(?P<scope>[A-Za-z0-9_$]+)!=null&&await (?P<persist>[A-Za-z0-9_$]+)\((?P=scope),\{\[(?P=arg)\.threadId\]:(?P=arg)\.assignment\}\)\}"
 )
 matches = []
 for path in Path("scratch/asar/webview/assets").glob("*.js"):
@@ -250,7 +250,7 @@ fallback = fallback_matches[0]
 replacement = (
     f"saveThreadProjectAssignment:async {arg}=>{{let {svc}={holder}.threadProjectAssignments;"
     f"await({svc}==null?{fallback}({scope},{arg}):{svc}.setAssignment({arg})),"
-    f"{scope}!=null&&await {persist}({scope},{arg})}}"
+    f"{scope}!=null&&await {persist}({scope},{{[{arg}.threadId]:{arg}.assignment}})}}"
 )
 path.write_text(pattern.sub(replacement, source, count=1))
 PY
@@ -444,18 +444,31 @@ for path in Path("scratch/asar/webview/assets").glob("*.js"):
 PY
 
 python3 - <<'PY'
+import re
 from pathlib import Path
 
+# The base logger factory (minified name drifts: m/p/...) is uniquely
+# identified by its `[${e}] ` prefix template. Wrap it so a set of noisy
+# logger names get a no-op logger instead of spamming the console.
+pattern = re.compile(r"function (?P<name>[A-Za-z0-9_$]+)\(e\)\{let t=`\[\$\{e\}\] `,")
+noop = "{trace(){},debug(){},info(){},warning(){},error(){},log(){},dispose(){}}"
+sentinel = (
+    "var __noisyLoggers=new Set([`git`,`electron-message-handler`,"
+    "`electron-fetch-wrapper`,`AppServerConnection`]);"
+)
+repl = lambda m: (
+    f"{sentinel}function {m.group('name')}(e)"
+    f"{{if(__noisyLoggers.has(e))return {noop};let t=`[${{e}}] `,"
+)
+
 patched = False
-needle = "function m(e){let t=`[${e}] `,n=(e,n,r)=>{l().log(e,`${t}${n}`,i(r))},r=e=>(t,r)=>{n(e,t,r)};return{trace:r(`trace`),debug:r(`debug`),info:r(`info`),warning:r(`warning`),error:r(`error`),log:(e,t,r)=>{n(e,t,r)},dispose:()=>{l().dispose()}}}"
-replacement = "var y=new Set([`git`,`electron-message-handler`,`electron-fetch-wrapper`,`AppServerConnection`]);function m(e){if(y.has(e))return{trace(){},debug(){},info(){},warning(){},error(){},log(){},dispose(){}};let t=`[${e}] `,n=(e,n,r)=>{l().log(e,`${t}${n}`,i(r))},r=e=>(t,r)=>{n(e,t,r)};return{trace:r(`trace`),debug:r(`debug`),info:r(`info`),warning:r(`warning`),error:r(`error`),log:(e,t,r)=>{n(e,t,r)},dispose:()=>{l().dispose()}}}"
 for path in Path("scratch/asar/.vite/build").glob("crash-reporter-env-*.js"):
     source = path.read_text(errors="ignore")
-    if needle not in source:
-        continue
-    path.write_text(source.replace(needle, replacement, 1))
-    patched = True
-    break
+    source, count = pattern.subn(repl, source, count=1)
+    if count:
+        path.write_text(source)
+        patched = True
+        break
 
 if not patched:
     raise SystemExit("Failed to patch noisy logger names")
