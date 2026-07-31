@@ -839,7 +839,15 @@ const nativeImage = {
     };
   },
 };
-const powerMonitor = createEmitterStub("powerMonitor");
+const powerMonitor = {
+  ...createEmitterStub("powerMonitor"),
+  getSystemIdleState(): string {
+    return "active";
+  },
+  getSystemIdleTime(): number {
+    return 0;
+  },
+};
 const screen = {
   ...createEmitterStub("screen"),
   getAllDisplays(): Array<{
@@ -895,6 +903,7 @@ const protocol = {
   },
 };
 function createSessionStub(label: string): {
+  cookies: ReturnType<typeof createEmitterStub>;
   getUserAgent: () => string;
   loadExtension: (extensionPath: string) => Promise<{
     id: string;
@@ -938,6 +947,7 @@ function createSessionStub(label: string): {
     off: emitter.off,
     on: emitter.on,
     once: emitter.once,
+    cookies,
     protocol,
     removeListener: emitter.removeListener,
     setPermissionCheckHandler(...args: unknown[]): void {
