@@ -376,6 +376,30 @@ const appBase = {
     log("app.requestSingleInstanceLock", []);
     return true;
   },
+  setAsDefaultProtocolClient(
+    protocol: string,
+    path?: string,
+    args?: string[],
+  ): boolean {
+    log("app.setAsDefaultProtocolClient", [protocol, path, args]);
+    return true;
+  },
+  isDefaultProtocolClient(
+    protocol: string,
+    path?: string,
+    args?: string[],
+  ): boolean {
+    log("app.isDefaultProtocolClient", [protocol, path, args]);
+    return true;
+  },
+  removeAsDefaultProtocolClient(
+    protocol: string,
+    path?: string,
+    args?: string[],
+  ): boolean {
+    log("app.removeAsDefaultProtocolClient", [protocol, path, args]);
+    return true;
+  },
   isReady(): boolean {
     log("app.isReady", []);
     return appReady;
@@ -439,6 +463,7 @@ class BrowserWindow {
   static focusedWindow: BrowserWindow | null = null;
   id: number;
   private destroyed = false;
+  private visible = true;
   private title = "Codex";
   private bounds = { x: 0, y: 0, width: 1280, height: 820 };
   webContents: Record<string, unknown>;
@@ -446,7 +471,12 @@ class BrowserWindow {
 
   constructor(...args: unknown[]) {
     log("new BrowserWindow", args);
+    const options =
+      typeof args[0] === "object" && args[0] !== null
+        ? (args[0] as { show?: boolean })
+        : undefined;
     this.id = BrowserWindow.nextId++;
+    this.visible = options?.show !== false;
     this.emitter = createEmitterStub(`BrowserWindow#${this.id}`);
 
     const webContentsEmitter = createEmitterStub(
@@ -582,6 +612,7 @@ class BrowserWindow {
   destroy(): void {
     log(`BrowserWindow#${this.id}.destroy`, []);
     this.destroyed = true;
+    this.visible = false;
     if (BrowserWindow.focusedWindow === this) {
       BrowserWindow.focusedWindow = null;
     }
@@ -596,6 +627,11 @@ class BrowserWindow {
   isFocused(): boolean {
     log(`BrowserWindow#${this.id}.isFocused`, []);
     return BrowserWindow.focusedWindow === this && !this.destroyed;
+  }
+
+  isVisible(): boolean {
+    log(`BrowserWindow#${this.id}.isVisible`, []);
+    return this.visible && !this.destroyed;
   }
 
   removeMenu(): void {
@@ -634,14 +670,29 @@ class BrowserWindow {
 
   show(): void {
     log(`BrowserWindow#${this.id}.show`, []);
+    if (!this.destroyed) {
+      this.visible = true;
+      this.emitter.emit("show");
+    }
   }
 
   hide(): void {
     log(`BrowserWindow#${this.id}.hide`, []);
+    if (!this.destroyed) {
+      this.visible = false;
+      if (BrowserWindow.focusedWindow === this) {
+        BrowserWindow.focusedWindow = null;
+      }
+      this.emitter.emit("hide");
+    }
   }
 
   focus(): void {
     log(`BrowserWindow#${this.id}.focus`, []);
+    if (this.destroyed) {
+      return;
+    }
+    this.visible = true;
     BrowserWindow.focusedWindow = this;
     this.emitter.emit("focus");
   }
@@ -848,6 +899,32 @@ const powerMonitor = {
     return 0;
   },
 };
+const registeredGlobalShortcuts = new Set<string>();
+const globalShortcut = {
+  register(accelerator: string, callback: () => void): boolean {
+    log("globalShortcut.register", [accelerator, callback]);
+    registeredGlobalShortcuts.add(accelerator);
+    return true;
+  },
+  registerAll(accelerators: string[], callback: () => void): void {
+    log("globalShortcut.registerAll", [accelerators, callback]);
+    for (const accelerator of accelerators) {
+      registeredGlobalShortcuts.add(accelerator);
+    }
+  },
+  isRegistered(accelerator: string): boolean {
+    log("globalShortcut.isRegistered", [accelerator]);
+    return registeredGlobalShortcuts.has(accelerator);
+  },
+  unregister(accelerator: string): void {
+    log("globalShortcut.unregister", [accelerator]);
+    registeredGlobalShortcuts.delete(accelerator);
+  },
+  unregisterAll(): void {
+    log("globalShortcut.unregisterAll", []);
+    registeredGlobalShortcuts.clear();
+  },
+};
 const screen = {
   ...createEmitterStub("screen"),
   getAllDisplays(): Array<{
@@ -1010,6 +1087,7 @@ const electronModule = new Proxy(
     ipcMain,
     autoUpdater,
     crashReporter,
+    globalShortcut,
     MessageChannelMain,
     Menu,
     MenuItem,
@@ -1060,5 +1138,6 @@ export {
   webContents,
   crashReporter,
   dialog,
+  globalShortcut,
 };
 export default electronModule;

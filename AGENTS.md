@@ -245,6 +245,9 @@ These labels are the current truth.
   - required for pasted/attached local files and inline local previews
 - **disable Sentry in shell bundle(s)**
 - **disable Sentry in webview bundle(s)**
+- **disable appshot global hotkey service**
+  - browser mode cannot host the macOS bare-modifier helper used by shortcuts such as `DoubleCommand`
+  - appshot UI actions remain available
 
 ### [MOVED] behavior still matters, but source-of-truth is now regular source code, not upstream patch files
 

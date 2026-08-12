@@ -255,7 +255,39 @@ replacement = (
 path.write_text(pattern.sub(replacement, source, count=1))
 PY
 
+python3 - <<'PY'
+import re
+from pathlib import Path
 
+# Browser mode cannot register the macOS bare-modifier helper used by the
+# appshot global hotkey (for example, DoubleCommand). Disable only that
+# service; appshot capture remains available through renderer UI actions.
+pattern = re.compile(
+    r"(?P<prefix>[A-Za-z0-9_$]+)=new (?P<service>[A-Za-z0-9_$]+)"
+    r"\((?P<state>[A-Za-z0-9_$]+),(?P<settings>[A-Za-z0-9_$]+),"
+    r"(?P<window>[A-Za-z0-9_$]+),!0\),"
+    r"(?P<next>[A-Za-z0-9_$]+)=[A-Za-z0-9_$]+\((?P<overlay>[A-Za-z0-9_$]+)\),"
+)
+candidates = []
+for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
+    source = path.read_text(errors="ignore")
+    if "Registering appshot hotkey" not in source:
+        continue
+    for match in pattern.finditer(source):
+        nearby = source[match.end() : match.end() + 1800]
+        if "appshotHotkeysService:" in nearby:
+            candidates.append((path, source, match))
+
+if len(candidates) != 1:
+    raise SystemExit(
+        "Failed to disable appshot global hotkey: "
+        f"expected 1 candidate, found {len(candidates)}"
+    )
+
+path, source, match = candidates[0]
+replacement = match.group(0).replace(",!0),", ",!1),", 1)
+path.write_text(source[: match.start()] + replacement + source[match.end() :])
+PY
 
 python3 - <<'PY'
 import re

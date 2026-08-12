@@ -131,6 +131,14 @@ Inspect:
 These rewrites are minified-shape-sensitive. If they break, update the smallest
 regex/string match in `scripts/prepare_asar`.
 
+### 8. Appshot global hotkey suppression
+Inspect:
+- `scratch/asar/.vite/build/main-*.js`
+
+Browser mode disables construction of the appshot global-hotkey service because
+macOS bare-modifier shortcuts such as `DoubleCommand` require an upstream native
+helper binary. Appshot UI actions are unaffected.
+
 ## Fast path when upstream updates break us
 
 1. `rm -rf scratch scratch-backup`
