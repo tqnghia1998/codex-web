@@ -265,8 +265,7 @@ from pathlib import Path
 pattern = re.compile(
     r"(?P<prefix>[A-Za-z0-9_$]+)=new (?P<service>[A-Za-z0-9_$]+)"
     r"\((?P<state>[A-Za-z0-9_$]+),(?P<settings>[A-Za-z0-9_$]+),"
-    r"(?P<window>[A-Za-z0-9_$]+),!0\),"
-    r"(?P<next>[A-Za-z0-9_$]+)=[A-Za-z0-9_$]+\((?P<overlay>[A-Za-z0-9_$]+)\),"
+    r"(?P<window>[A-Za-z0-9_$]+),(?P<enabled>[^,]+),(?P<native>[A-Za-z0-9_$]+),"
 )
 candidates = []
 for path in Path("scratch/asar/.vite/build").glob("main-*.js"):
@@ -285,8 +284,7 @@ if len(candidates) != 1:
     )
 
 path, source, match = candidates[0]
-replacement = match.group(0).replace(",!0),", ",!1),", 1)
-path.write_text(source[: match.start()] + replacement + source[match.end() :])
+path.write_text(source[: match.start("enabled")] + "!1" + source[match.end("enabled") :])
 PY
 
 python3 - <<'PY'

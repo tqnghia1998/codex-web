@@ -134,6 +134,7 @@ function buildBetterSqliteRebuildArgs() {
     "rebuild",
     "better-sqlite3",
     "--foreground-scripts",
+    "--dangerously-allow-all-scripts",
     "--prefix",
     vendorCacheRoot,
     "--loglevel=error",
